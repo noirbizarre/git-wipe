@@ -160,12 +160,12 @@ setup wizard.
 
 ```console
 $ git wipe status
-AGE  SIZE  STATUS          BRANCH              PATH
-34w  -     merged,clean    blog-archive        ~/src/blog-archive
-30w  -     merged,dirty    submit-to-registry  ~/src/islamabad
-29w  -     orphan,clean    (detached)          ~/src/tree-sitter-x
-2h   -     unmerged      * migrate-vfs         ~/src/slicc
-3h   -     merged,gone     fix/typo            -
+BRANCH               PATH                 SIZE  AGE  STATUS
+  blog-archive       ~/src/blog-archive   -     34w  merged,clean
+  submit-to-registry ~/src/islamabad      -     30w  merged,dirty
+  (detached)         ~/src/tree-sitter-x  -     29w  orphan,clean
+* migrate-vfs        ~/src/slicc          -     2h   unmerged
+  fix/typo           -                    -     3h   merged,gone
 ```
 
 Sizing walks each worktree's directory tree, so by default `SIZE` is always
@@ -173,12 +173,12 @@ Sizing walks each worktree's directory tree, so by default `SIZE` is always
 
 ```console
 $ git wipe status --size
-AGE  SIZE    STATUS          BRANCH              PATH
-34w  160.7M  merged,clean    blog-archive        ~/src/blog-archive
-30w  116.1M  merged,dirty    submit-to-registry  ~/src/islamabad
-29w    6.0M  orphan,clean    (detached)          ~/src/tree-sitter-x
-2h     2.8G  unmerged      * migrate-vfs         ~/src/slicc
-3h        -  merged,gone     fix/typo            -
+BRANCH               PATH                 SIZE    AGE  STATUS
+  blog-archive       ~/src/blog-archive   160.7M  34w  merged,clean
+  submit-to-registry ~/src/islamabad      116.1M  30w  merged,dirty
+  (detached)         ~/src/tree-sitter-x  6.0M    29w  orphan,clean
+* migrate-vfs        ~/src/slicc          2.8G    2h   unmerged
+  fix/typo           -                    -       3h   merged,gone
 ```
 
 One line per worktree, plus one per local branch that has no worktree, sorted

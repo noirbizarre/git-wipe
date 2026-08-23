@@ -2290,7 +2290,11 @@ fn status_lists_branches_and_worktrees() {
     let out = status_stdout(dir.path(), &["status", "--no-color"]);
 
     assert!(
-        out.lines().next().unwrap().starts_with("AGE"),
+        out.lines()
+            .next()
+            .unwrap()
+            .trim_start()
+            .starts_with("BRANCH"),
         "first line must be the header, got: {out}"
     );
     for expected in [
@@ -2312,15 +2316,34 @@ fn status_alias_list_behaves_identically() {
     configure(&dir);
     add_branches(&dir);
 
-    // Ages tick between the two runs, so compare everything but the AGE
-    // column — the point is that the alias resolves to the same command.
+    // Whether a whitespace-separated token is exactly what `format_age`
+    // renders: a bare `?`, or digits followed by one of its unit suffixes.
+    // Nothing else in the table (branch names, paths, sizes, statuses)
+    // matches this shape — sizes use uppercase `B`/`K`/`M`/`G` and often a
+    // `.`, so there is no ambiguity.
+    fn is_age_token(token: &str) -> bool {
+        token == "?"
+            || (token.len() > 1
+                && token.as_bytes()[..token.len() - 1]
+                    .iter()
+                    .all(u8::is_ascii_digit)
+                && matches!(
+                    token.as_bytes()[token.len() - 1],
+                    b's' | b'm' | b'h' | b'd' | b'w'
+                ))
+    }
+
+    // Ages tick between the two runs, so mask out the AGE column by its
+    // value shape rather than its position — the point is that the alias
+    // resolves to the same command, not that ages are frozen in time.
     let without_age = |args: &[&str]| {
         status_stdout(dir.path(), args)
             .lines()
             .map(|line| {
-                line.split_once("  ")
-                    .map_or(line, |(_, rest)| rest)
-                    .to_string()
+                line.split_whitespace()
+                    .filter(|token| !is_age_token(token))
+                    .collect::<Vec<_>>()
+                    .join(" ")
             })
             .collect::<Vec<_>>()
     };

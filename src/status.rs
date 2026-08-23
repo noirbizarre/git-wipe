@@ -402,18 +402,18 @@ pub fn render(ui: &Ui, rows: &[Row], filtered: bool) {
                 .clone()
                 .unwrap_or_else(|| "(detached)".to_string());
             [
-                format_age(row.age),
-                format_size(row.size),
-                status,
                 format!("{} {branch}", if row.current { "*" } else { " " }),
                 row.path
                     .as_deref()
                     .map_or_else(|| "-".to_string(), tilde_path),
+                format_size(row.size),
+                format_age(row.age),
+                status,
             ]
         })
         .collect();
 
-    const HEADERS: [&str; 5] = ["AGE", "SIZE", "STATUS", "BRANCH", "PATH"];
+    const HEADERS: [&str; 5] = ["BRANCH", "PATH", "SIZE", "AGE", "STATUS"];
     let mut widths = HEADERS.map(|h| h.chars().count());
     for row in &cells {
         for (width, cell) in widths.iter_mut().zip(row) {
@@ -421,26 +421,25 @@ pub fn render(ui: &Ui, rows: &[Row], filtered: bool) {
         }
     }
     // BRANCH carries a two-character current-branch marker the header does not.
-    widths[3] = widths[3].max(HEADERS[3].chars().count() + 2);
+    widths[0] = widths[0].max(HEADERS[0].chars().count() + 2);
 
     ui.table_header(&format!(
-        "{:<a$}  {:<z$}  {:<s$}  {:<b$}  {}",
-        HEADERS[0],
+        "{:<b$}  {:<p$}  {:<z$}  {:<a$}  {}",
+        format!("  {}", HEADERS[0]),
         HEADERS[1],
         HEADERS[2],
-        format!("  {}", HEADERS[3]),
+        HEADERS[3],
         HEADERS[4],
-        a = widths[0],
-        z = widths[1],
-        s = widths[2],
-        b = widths[3],
+        b = widths[0],
+        p = widths[1],
+        z = widths[2],
+        a = widths[3],
     ));
 
     for (row, cell) in rows.iter().zip(&cells) {
         let tokens = status_tokens(row.flags);
-        let status_pad = " ".repeat(widths[2].saturating_sub(cell[2].chars().count()));
         let status = if tokens.is_empty() {
-            cell[2].clone()
+            cell[4].clone()
         } else {
             tokens
                 .iter()
@@ -449,14 +448,15 @@ pub fn render(ui: &Ui, rows: &[Row], filtered: bool) {
                 .join(",")
         };
         ui.table_row(&format!(
-            "{:<a$}  {:<z$}  {status}{status_pad}  {:<b$}  {}",
+            "{:<b$}  {:<p$}  {:<z$}  {:<a$}  {status}",
             cell[0],
             cell[1],
+            cell[2],
             cell[3],
-            cell[4],
-            a = widths[0],
-            z = widths[1],
-            b = widths[3],
+            b = widths[0],
+            p = widths[1],
+            z = widths[2],
+            a = widths[3],
         ));
     }
 }
