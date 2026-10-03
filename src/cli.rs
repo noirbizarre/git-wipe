@@ -148,8 +148,8 @@ pub struct Cli {
     ///
     /// Without a value the forge is identified from each remote URL (GitHub,
     /// GitLab, Gitea and Forgejo). Pass `--forge=<KIND>` (github, gitlab,
-    /// gitea or forgejo) for a self-hosted instance whose host name gives it
-    /// away. A branch only counts as merged if the request ended exactly at
+    /// gitea or forgejo) for a self-hosted instance whose host name does not
+    /// give it away. A branch only counts as merged if the request ended exactly at
     /// the branch tip.
     ///
     /// This sends branch names to the forge. Tokens come from the environment,
