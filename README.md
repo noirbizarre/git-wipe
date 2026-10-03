@@ -599,7 +599,8 @@ CLI flags:
    - *Simulated merge*: `git merge-tree --write-tree <target> <branch>` --
      if merging the branch would produce exactly the target's current tree,
      the branch adds nothing. Handles squash merges even after the target has
-     advanced with unrelated changes.
+     advanced with unrelated changes. Requires git 2.38 or later; on older
+     versions this strategy fails with a warning and the others still run.
    - *Squash-merge detection*: compares the patch-ID of the branch's combined
      diff against the target's recent commits, catching multi-commit branches
      collapsed into a single squash commit.
