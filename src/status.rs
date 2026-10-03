@@ -31,7 +31,7 @@ use crate::worktrees::{worktree_age, worktree_size};
 
 /// Emitted whenever a `gone` branch is reported: `status` never fetches, so the
 /// remote-tracking refs it reads are only as fresh as the last `git fetch`.
-const STALE_GONE_WARNING: &str =
+pub const STALE_GONE_WARNING: &str =
     "Remotes were not fetched; deleted-upstream detection may be stale.";
 
 /// What a [`Row`] describes.
@@ -181,16 +181,21 @@ pub fn scan(
         .iter()
         .filter(|b| !merged_set.contains(b.as_str()))
         .collect();
-    let unmerged: HashMap<&str, bool> = parallel::map(&to_probe, opts.jobs, |_, branch| {
-        // An error means we could not prove containment; assume unmerged, the
-        // same conservative default the cleaner uses.
+    let probes = parallel::map(&to_probe, opts.jobs, |_, branch| {
         git.branch_has_unmerged_commits(branch, &targets)
-            .unwrap_or(true)
-    })
-    .into_iter()
-    .zip(&to_probe)
-    .map(|(unmerged, branch)| (branch.as_str(), unmerged))
-    .collect();
+    });
+    // An error means we could not prove containment; assume unmerged, the same
+    // conservative default the cleaner uses, and say so as it does.
+    let mut unmerged: HashMap<&str, bool> = HashMap::new();
+    for (probe, branch) in probes.into_iter().zip(&to_probe) {
+        let value = probe.unwrap_or_else(|err| {
+            let message = format!("Could not check whether '{branch}' has unmerged commits: {err}");
+            ui.warning(&message);
+            warnings.push(message);
+            true
+        });
+        unmerged.insert(branch.as_str(), value);
+    }
 
     let mut rows = Vec::new();
     let mut with_worktree: HashSet<&str> = HashSet::new();
@@ -208,10 +213,14 @@ pub fn scan(
         match dirty {
             Ok(true) => flags.dirty = true,
             Ok(false) => flags.clean = true,
-            Err(err) => warnings.push(format!(
-                "Could not check the status of '{}': {err}",
-                tilde_path(&wt.path)
-            )),
+            Err(err) => {
+                let message = format!(
+                    "Could not check the status of '{}': {err}",
+                    tilde_path(&wt.path)
+                );
+                ui.warning(&message);
+                warnings.push(message);
+            }
         }
         // An orphan has no live branch left to compare against.
         if let Some(branch) = &wt.branch
@@ -377,8 +386,8 @@ fn style_token(token: &str) -> String {
 
 /// Render an age as its largest whole unit: `45s`, `1h`, `3d`, `2w`.
 ///
-/// [`MinAge`]'s own `Display` only renders exact multiples, so a 90-minute age
-/// would print as `5400s` — precise, and unreadable in a column.
+/// [`MinAge`]'s own `Display` only renders exact multiples, so an age of 1h30m45s
+/// would print as `5445s` — precise, and unreadable in a column.
 fn format_age(age: Option<Duration>) -> String {
     let Some(age) = age else {
         return "?".to_string();

@@ -129,7 +129,7 @@ fn admin_dir_time(git: &Git, wt: &Worktree) -> Option<SystemTime> {
     metadata.created().or_else(|_| metadata.modified()).ok()
 }
 
-/// Whether `wt` was created less than `min_age` ago and must be left alone.
+/// Whether `wt` last changed less than `min_age` ago and must be left alone.
 ///
 /// A zero `min_age` short-circuits, so the default configuration costs no
 /// extra `git` invocation.

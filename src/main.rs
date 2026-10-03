@@ -137,8 +137,13 @@ fn is_cancelled(err: &anyhow::Error) -> bool {
 ///
 /// When the root cause is a [`GitCommandError`] classified as a network or
 /// auth failure, the headline gets a matching prefix so users can tell at a
-/// glance "this is my network, not a bug". The classification itself lives in
-/// [`ui::Ui::report_failure`] so every failure path agrees on it.
+/// glance "this is my network, not a bug". The classification itself is the
+/// [`GitErrorKind`] computed once when the command fails, which
+/// [`ui::Ui::report_failure`] reads too, so every failure path agrees on *what*
+/// went wrong. The wording differs on purpose: `report_failure` words a
+/// per-item failure ("cannot delete 'x'"), whereas this renders a fatal error
+/// that has no target, and forge errors ([`forge::ForgeError`]) read as the
+/// tail of a warning sentence, hence their lower case.
 fn report_error(ui: &ui::Ui, err: &anyhow::Error) {
     let headline = match err.downcast_ref::<GitCommandError>().map(|gerr| gerr.kind) {
         Some(GitErrorKind::Network) => {
@@ -187,7 +192,7 @@ fn handle_config_command(
             }
             match config::Config::try_load(git)? {
                 Some(cfg) => {
-                    ui.heading("Current configuration [wipe]:");
+                    ui.heading(&format!("Current configuration [{}]:", config::SECTION));
                     ui.blank();
 
                     ui.field(
@@ -293,11 +298,8 @@ fn handle_config_command(
 
         ConfigAction::Set { key, value } => {
             let full_key = format!("{}.{key}", config::SECTION);
-            if key == "forge" {
-                value
-                    .parse::<forge::ForgeSetting>()
-                    .with_context(|| format!("invalid value for {full_key}"))?;
-            }
+            config::validate_value(&key, &value)
+                .with_context(|| format!("invalid value for {full_key}"))?;
             if is_multi_valued(&key) {
                 // `git config --local <key> <value>` refuses a key that already
                 // holds several values. Treat `set` as "replace every value"
@@ -608,10 +610,7 @@ fn resolve_worktrunk(git: &git::Git, ui: &ui::Ui, cli: &Cli, cfg: &config::Confi
         if cli.effective_yes() {
             return Ok(true);
         }
-        return ui.confirm(
-            "Worktrunk detected. Use it for worktree removal (triggers pre/post-remove hooks)?",
-            true,
-        );
+        return ui.confirm(config::WORKTRUNK_PROMPT, true);
     }
 
     Ok(false)

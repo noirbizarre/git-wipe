@@ -87,7 +87,8 @@ That only works once the man page is installed — otherwise git reports
 pages and the shell completions for you; `cargo install` places the binary
 alone, so with it they have to be installed separately.
 
-From a checkout, `mise` does both, plus zsh completions:
+From a checkout, `mise` installs the binary, the man pages and the zsh
+completions in one go:
 
 ```sh
 mise run setup
@@ -271,9 +272,10 @@ that has never been configured is an error rather than a setup wizard (run
 | `min_age` | The effective minimum worktree age, e.g. `"0s"` or `"2h"` |
 | `forge` | The effective forge setting: `"false"`, `"true"` (auto-detect) or a forge name |
 | `jobs` | The effective number of concurrent git probes used during analysis |
-| `fetch` | Phase 1: per-remote fetch/prune outcome |
-| `pull` | Phase 2: per-branch fast-forward outcome |
-| `local` | Phase 3: `merged`/`gone` candidates (`pr_merged` lists the ones the forge settled), plus per-branch and per-worktree outcomes |
+| `fetch` | Phase 1: per-remote fetch/prune outcome, with `skipped` set under `--no-fetch` |
+| `pull` | Phase 2: per-branch fast-forward outcome, with `skipped` set under `--no-pull` |
+| `local` | Phase 3: `merged`/`gone` candidates (`pr_merged` lists the ones the forge settled), plus per-branch and per-worktree outcomes; `skipped` is set under `--remote-only` |
+| `remotes_skipped` | Whether `--local-only` skipped phase 4 |
 | `remotes` | Phase 4: merged branches (and the `pr_merged` subset) and deletion outcome per remote |
 | `warnings` | Non-fatal messages surfaced during the run |
 | `errors` | Failed operations, each with `action`, `target`, `kind` (`network`, `auth`, `other`) and `message` |
@@ -335,7 +337,8 @@ git wipe config list
 # Re-run the interactive setup wizard
 git wipe config setup
 
-# Set a configuration value directly
+# Set a configuration value directly (the value is validated, and unknown
+# keys are refused)
 git wipe config set worktrunk false
 
 # Add a protected branch pattern
@@ -394,12 +397,12 @@ to the repository-local `.git/config`:
 | `protected` | multi-value | Glob patterns for branches that should never be deleted |
 | `ignore` | multi-value | Glob patterns for branches git-wipe ignores entirely |
 | `remote` | multi-value | Remotes to delete branches from (omit for all remotes) |
-| `worktrunk` | bool | Enable/disable [worktrunk](https://worktrunk.dev) for worktree removal. When omitted, auto-detects (see below) |
+| `worktrunk` | bool (`true`/`false`, `yes`/`no`, `on`/`off`, `1`/`0`) | Enable/disable [worktrunk](https://worktrunk.dev) for worktree removal. When omitted, auto-detects (see below) |
 | `effort` | `1`-`3` | How thorough merge detection should be. Defaults to `2`; `--effort` overrides it |
 | `minage` | duration | Minimum age a worktree must have before it may be removed, e.g. `30s`, `2h`, `7d`. Defaults to `0s` (no guard); `--min-age` overrides it |
 | `minsize` | size | Minimum on-disk size a worktree must have before it may be removed, e.g. `512B`, `100K`, `100M`, `2G`. Defaults to `0B` (no guard); `--min-size` overrides it |
 | `jobs` | integer >= 1 | How many read-only git probes analysis may run at once. Defaults to the CPU count; `--jobs` overrides it, `--verbose` forces `1` |
-| `forge` | `true`, `false` or a forge name | Ask the forge about merged pull/merge requests before trying git (see [Forge detection](#forge-detection)). `true` identifies the forge from each remote URL; `github`, `gitlab`, `gitea` or `forgejo` forces a kind for self-hosted instances whose host name does not give it away. Off when omitted; `--forge` enables it and `--no-forge` disables it |
+| `forge` | `true`, `false` or a forge name | Ask the forge about merged pull/merge requests before trying git (see [Forge detection](#forge-detection)). `true` (also `on`, `yes`, `1`, `auto`) identifies the forge from each remote URL; `false` (also `off`, `no`, `0`) disables it; `github`, `gitlab`, `gitea`, `forgejo` (or its alias `codeberg`) forces a kind for self-hosted instances whose host name does not give it away. Off when omitted; `--forge` enables it and `--no-forge` disables it |
 
 When `worktrunk` is unset, git-wipe enables it only if the repository has a
 `[worktrunk]` config section **and** `wt` is on `$PATH`; it then asks once per
@@ -499,7 +502,7 @@ or written to git config.
 
 | Forge | Variables | Without a token |
 | --- | --- | --- |
-| GitHub | `GITHUB_TOKEN`, `GH_TOKEN` (`GH_ENTERPRISE_TOKEN` for Enterprise Server) | Not possible: the GraphQL API requires one |
+| GitHub | `GITHUB_TOKEN`, `GH_TOKEN` (`GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` for Enterprise Server) | Not possible: the GraphQL API requires one |
 | GitLab | `GITLAB_TOKEN`, `GL_TOKEN` | Public projects only |
 | Gitea, Forgejo | `GITEA_TOKEN`, `FORGEJO_TOKEN` | Public repositories only |
 
@@ -597,7 +600,8 @@ CLI flags:
    - *Simulated merge*: `git merge-tree --write-tree <target> <branch>` --
      if merging the branch would produce exactly the target's current tree,
      the branch adds nothing. Handles squash merges even after the target has
-     advanced with unrelated changes.
+     advanced with unrelated changes. Requires git 2.38 or later; on older
+     versions this strategy fails with a warning and the others still run.
    - *Squash-merge detection*: compares the patch-ID of the branch's combined
      diff against the target's recent commits, catching multi-commit branches
      collapsed into a single squash commit.
@@ -629,8 +633,10 @@ CLI flags:
    (someone may simply have deleted an unmerged remote branch), these entries
    are **listed unchecked** in the multiselect and are never auto-selected by
    `--yes` unless you also pass `--delete-gone`. Detection requires up-to-date
-   remote-tracking refs, so it only runs after a successful `fetch --prune`,
-   or in `--dry-run` where a warning notes the results may be stale.
+    remote-tracking refs, so it only runs after a successful `fetch --prune`,
+    or in `--dry-run` where a warning notes the results may be stale. `git wipe
+    status` never fetches: it reports `gone` from the refs as they are on disk,
+    with the same staleness warning.
 
    All cleanup items are presented in a **single unified multiselect**:
    merged branches (with their worktree path shown when applicable), branches
@@ -639,16 +645,19 @@ CLI flags:
    deleted-upstream branches and orphan worktrees default to unselected.
 
    Two cases are handled outside that multiselect. Worktrees that are dirty
-   (uncommitted or untracked changes) or hold unmerged commits are collected
-   into a **second multiselect** for forced removal, defaulting to unselected;
+   (uncommitted or untracked changes) are collected into a **second
+   multiselect** for forced removal, defaulting to unselected;
    anything left unselected there is skipped entirely, with neither the
    worktree removed nor the branch deleted. `--force` drives this prompt and
    nothing else: interactively it pre-selects every entry (each can still be
    unchecked), and under `--yes` it force-removes them all without prompting.
    `--yes` on its own — including via `--json` — skips them, so a
    non-interactive run never destroys uncommitted work. Separately, a selected branch whose
-   commits are unreachable from any merge target is force-deleted
-   automatically, with an informational line rather than a prompt.
+   worktree is clean but whose commits are unreachable from any merge target
+   is force-deleted automatically, with an informational line rather than a
+   prompt. That check only runs when worktrunk is enabled; a dirty worktree
+   that also holds such commits is listed in the forced-removal prompt with a
+   `dirty + unmerged commits` hint.
 
    For selected branches that have worktrees, the worktree is removed first,
    then the branch is deleted with `git branch -D` (force-delete is safe here
@@ -734,7 +743,7 @@ flowchart TD
     FindLocal --> PatchID["Patch-ID matching\ngit patch-id\n(effort 3)"]
     FindLocal --> SimMerge["Simulated merge\ngit merge-tree --write-tree\n(effort 3)"]
     FindLocal --> Squash["Squash-merge detection\ncombined patch-id\n(effort 3)"]
-    FindLocal --> GoneUpstream[Deleted-upstream detection\nrequires a fetch]
+    FindLocal --> GoneUpstream[Deleted-upstream detection\nrequires a fetch (or --dry-run)]
     FindLocal --> Orphans[Find orphan worktrees]
     ForgeAsk --> SelectLocal
     Merged --> SelectLocal[Unified multiselect:\nbranches + worktrees]
@@ -767,11 +776,13 @@ flowchart TD
 
 ## Development
 
-This project uses [mise](https://mise.jdx.dev/) for task management. Start by
-installing the toolchain and the git hooks:
+This project uses [mise](https://mise.jdx.dev/) for task management. You need
+[rustup](https://rustup.rs/) and mise installed beforehand: mise deliberately
+does not manage Rust, which comes from rustup (see `rust-toolchain.toml`).
+Start by installing the tools and the git hooks:
 
 ```sh
-mise install            # Install the pinned toolchain and tools
+mise install            # Install the pinned tools (git-cliff, prek, nextest, …)
 prek install            # Install the pre-commit and commit-msg git hooks
 ```
 
@@ -790,15 +801,16 @@ mise run check          # Run all checks (fmt-check + lint + test)
 mise run cover          # Generate lcov coverage report
 mise run cover:html     # Generate HTML coverage report
 mise run changelog      # Preview the next version and changelog
-mise run ship:validate  # Validate the gh-ship release setup
+mise run ship:validate  # Validate the gh-ship release setup (needs gh + the gh-ship extension)
 mise run man            # Collect the generated man pages and completions
-mise run setup          # Install the binary locally
+mise run setup          # Install the binary, man pages and zsh completions locally
 ```
 
 ### Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/), enforced by
-commitlint via the prek `commit-msg` hook and re-checked by the CI lint job.
+commitlint via the prek `commit-msg` hook (a local check: the CI lint job runs
+the other hooks, not this one).
 The changelog and the next version number are derived from them, so the type
 and scope matter.
 

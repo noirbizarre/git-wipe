@@ -23,10 +23,10 @@ pub struct Cli {
     #[arg(short = 'y', long)]
     pub yes: bool,
 
-    /// Force-remove worktrees with uncommitted changes or unmerged commits
+    /// Force-remove worktrees with uncommitted changes
     ///
     /// Without this flag the forced-removal prompt defaults to nothing
-    /// selected, and with --yes (or --json) problematic worktrees are skipped
+    /// selected, and with --yes (or --json) dirty worktrees are skipped
     /// entirely. Interactively, --force pre-selects them; you can still
     /// uncheck any entry.
     #[arg(short = 'f', long)]
@@ -49,7 +49,7 @@ pub struct Cli {
     pub no_pull: bool,
 
     /// Only clean local branches (skip remote deletion)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "remote_only")]
     pub local_only: bool,
 
     /// Only clean remote branches (skip local deletion)
@@ -84,11 +84,12 @@ pub struct Cli {
     #[arg(long, value_name = "LEVEL", global = true, value_parser = clap::value_parser!(u8).range(1..=3))]
     pub effort: Option<u8>,
 
-    /// Skip worktrees created less than this long ago (default: 0s)
+    /// Skip worktrees changed less than this long ago (default: 0s)
     ///
     /// Accepts a single value and unit: 30s, 15m, 2h, 7d, 1w — or a bare 0 to
-    /// disable the guard. Protects a worktree you just created from the
-    /// default branch from being removed along with its "merged" branch.
+    /// disable the guard. Age is measured from the last real change in the
+    /// worktree. Protects a worktree you just created from the default branch
+    /// from being removed along with its "merged" branch.
     ///
     /// On `status` this is a filter instead of a guard: only entries at least
     /// this old are listed, and the configured `wipe.minage` is not inherited.
@@ -100,8 +101,8 @@ pub struct Cli {
     /// Accepts a single value and unit: 512B, 100K, 100M, 2G — binary units —
     /// or a bare 0 to disable the filter/guard.
     ///
-    /// On a wipe run this excludes smaller worktrees from the candidate list
-    /// entirely. On `status` this is a display filter instead, and the
+    /// On a wipe run smaller worktrees are left in place, and so are their
+    /// branches (reported as `too_small`). On `status` this is a display filter instead, and the
     /// configured `wipe.minsize` is not inherited — same reasoning as
     /// `--min-age`.
     ///
@@ -148,13 +149,13 @@ pub struct Cli {
     ///
     /// Without a value the forge is identified from each remote URL (GitHub,
     /// GitLab, Gitea and Forgejo). Pass `--forge=<KIND>` (github, gitlab,
-    /// gitea or forgejo) for a self-hosted instance whose host name gives it
-    /// away. A branch only counts as merged if the request ended exactly at
+    /// gitea or forgejo) for a self-hosted instance whose host name does not
+    /// give it away. A branch only counts as merged if the request ended exactly at
     /// the branch tip.
     ///
     /// This sends branch names to the forge. Tokens come from the environment,
     /// never from git config: GITHUB_TOKEN or GH_TOKEN (GH_ENTERPRISE_TOKEN
-    /// for Enterprise Server), GITLAB_TOKEN or GL_TOKEN, GITEA_TOKEN or
+    /// or GITHUB_ENTERPRISE_TOKEN for Enterprise Server), GITLAB_TOKEN or GL_TOKEN, GITEA_TOKEN or
     /// FORGEJO_TOKEN. GitHub requires one; the others also work anonymously on
     /// public projects.
     ///
@@ -177,8 +178,9 @@ pub struct Cli {
 
     /// Output a single JSON document to stdout (implies --yes)
     ///
-    /// Human-readable logs keep going to stderr. The document is pretty-printed
-    /// on a terminal and compact when piped or redirected.
+    /// Human-readable output is suppressed: stdout carries the document alone.
+    /// The document is pretty-printed on a terminal and compact when piped or
+    /// redirected.
     ///
     /// Global so it can be given before or after a subcommand
     /// (`git wipe config list --json`).
@@ -444,6 +446,13 @@ mod tests {
     fn cli_min_size_rejects_garbage() {
         assert!(Cli::try_parse_from(["git-wipe", "--min-size", "soon"]).is_err());
         assert!(Cli::try_parse_from(["git-wipe", "--min-size", "5x"]).is_err());
+    }
+
+    #[test]
+    fn cli_local_only_and_remote_only_conflict() {
+        assert!(Cli::try_parse_from(["git-wipe", "--local-only"]).is_ok());
+        assert!(Cli::try_parse_from(["git-wipe", "--remote-only"]).is_ok());
+        assert!(Cli::try_parse_from(["git-wipe", "--local-only", "--remote-only"]).is_err());
     }
 
     #[test]

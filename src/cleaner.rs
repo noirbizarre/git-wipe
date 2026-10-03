@@ -6,7 +6,7 @@
 //! [`crate::worktrees`].
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -33,6 +33,16 @@ fn fail(ui: &Ui, report: &mut Report, action: &str, target: &str, err: &anyhow::
     report.push_error(action, target, err);
 }
 
+/// [`fail`] for a failure on a filesystem path.
+///
+/// The user sees the `~`-shortened path; the JSON report keeps the absolute one
+/// (see [`tilde_path`]), so consumers can match it against the paths they
+/// already have.
+fn fail_path(ui: &Ui, report: &mut Report, action: &str, path: &Path, err: &anyhow::Error) {
+    ui.report_failure(action, &tilde_path(path), err);
+    report.push_error(action, &path_string(path), err);
+}
+
 /// Emit a warning to both the user and the JSON report.
 fn warn(ui: &Ui, report: &mut Report, message: &str) {
     ui.warning(message);
@@ -52,7 +62,8 @@ fn join_with_and(parts: &[String]) -> String {
 #[derive(Debug, Clone, Default)]
 pub struct CleanerOptions {
     pub yes: bool,
-    /// Force-remove worktrees that are dirty or hold unmerged commits.
+    /// Force-remove dirty worktrees (those with uncommitted changes). It drives
+    /// the forced-removal prompt and nothing else.
     pub force: bool,
     pub dry_run: bool,
     pub no_fetch: bool,
@@ -283,12 +294,11 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             let gone = ui.spinner("Scanning for deleted upstreams…", || {
                 find_gone_local(git, &filter, &merged)
             })?;
+            // Unlike `status`, which never fetches and so warns whenever it
+            // reports a `gone` entry, a wipe run only warns when no fetch
+            // succeeded to refresh the refs first.
             if !gone.is_empty() && !fetch_succeeded {
-                warn(
-                    ui,
-                    &mut report,
-                    "Remotes were not fetched; deleted-upstream detection may be stale.",
-                );
+                warn(ui, &mut report, crate::status::STALE_GONE_WARNING);
             }
             gone
         } else {
@@ -774,7 +784,10 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         let (force, force_delete) =
                             force_map.get(branch).copied().unwrap_or((false, false));
                         if opts.dry_run {
-                            ui.dry_run(&format!("Would remove worktree '{}'.", wt.path.display()));
+                            ui.dry_run(&format!(
+                                "Would remove worktree '{}'.",
+                                tilde_path(&wt.path)
+                            ));
                             if opts.use_worktrunk {
                                 wt_handled_branches.insert(branch.clone());
                             }
@@ -815,7 +828,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                                     ItemStatus::Removed
                                 }
                                 Err(e) => {
-                                    fail(ui, &mut report, "remove", &tilde_path(&wt.path), &e);
+                                    fail_path(ui, &mut report, "remove", &wt.path, &e);
                                     ItemStatus::Failed
                                 }
                             };
@@ -838,7 +851,10 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         continue;
                     }
                     if opts.dry_run {
-                        ui.dry_run(&format!("Would remove worktree '{}'.", wt.path.display()));
+                        ui.dry_run(&format!(
+                            "Would remove worktree '{}'.",
+                            tilde_path(&wt.path)
+                        ));
                         report.local.worktrees.push(WorktreeEntry {
                             path: path_string(&wt.path),
                             branch: wt.branch.clone(),
@@ -865,7 +881,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                                 ItemStatus::Removed
                             }
                             Err(e) => {
-                                fail(ui, &mut report, "remove", &tilde_path(&wt.path), &e);
+                                fail_path(ui, &mut report, "remove", &wt.path, &e);
                                 ItemStatus::Failed
                             }
                         };
@@ -898,13 +914,24 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             // leave behind a branch git-wipe considers merged. For such
             // branches we verify the ref is actually gone and delete it
             // ourselves if it survived. Branches whose worktree the user chose
-            // not to force-remove are skipped.
+            // not to force-remove, or that a guard (locked, too young, too
+            // small) left in place, are skipped.
             for branch in &candidates {
                 let key = format!("branch:{branch}");
                 if !selected.contains(&key) {
                     continue;
                 }
                 if skip_set.contains(branch) {
+                    continue;
+                }
+                // A guarded worktree (locked, too young, too small) was left
+                // in place and still has the branch checked out, so git would
+                // refuse to delete it. Leave the branch alone too; it stays
+                // `Skipped`, like the worktree already reported above.
+                if wt_map
+                    .get(branch)
+                    .is_some_and(|wt| worktree_guard(wt, &young, &small).is_some())
+                {
                     continue;
                 }
                 if opts.dry_run {
@@ -1138,7 +1165,7 @@ pub fn effective_remotes(git: &Git, config: &Config) -> Result<Vec<String>> {
 enum WorktreeGuard {
     /// `git worktree lock` was used on it.
     Locked,
-    /// It was created less than `--min-age` ago.
+    /// It last changed less than `--min-age` ago.
     TooYoung,
     /// It is smaller than `--min-size`.
     TooSmall,
@@ -1199,18 +1226,18 @@ fn format_locked_skip_message(wt: &Worktree) -> String {
                 return format!(
                     "  Skipping locked worktree '{}' (branch: {branch_label}): \
                      owner (pid {pid}) is still running ({reason}).",
-                    wt.path.display()
+                    tilde_path(&wt.path)
                 );
             }
             format!(
                 "  Skipping locked worktree '{}' (branch: {branch_label}): {reason}",
-                wt.path.display()
+                tilde_path(&wt.path)
             )
         }
         None => {
             format!(
                 "  Skipping locked worktree '{}' (branch: {branch_label}).",
-                wt.path.display()
+                tilde_path(&wt.path)
             )
         }
     }
@@ -1252,16 +1279,16 @@ fn resolve_stale_lock(
         ui.dry_run(&format!(
             "Would unlock stale lock on worktree '{}' (branch: {branch_label}): \
              pid {pid} is no longer running (reason: {reason}).",
-            wt.path.display()
+            tilde_path(&wt.path)
         ));
     } else if let Err(err) = git.worktree_unlock(&wt.path) {
-        fail(ui, report, "unlock", &path_string(&wt.path), &err);
+        fail_path(ui, report, "unlock", &wt.path, &err);
         return None; // couldn't unlock: stays guarded as locked
     } else {
         ui.muted(&format!(
             "Unlocked stale lock on worktree '{}' (branch: {branch_label}): \
              pid {pid} is no longer running (reason: {reason}).",
-            wt.path.display()
+            tilde_path(&wt.path)
         ));
     }
 
@@ -1282,8 +1309,8 @@ fn resolve_stale_lock(
 fn format_too_young_skip_message(wt: &Worktree, min_age: MinAge) -> String {
     let branch_label = wt.branch.as_deref().unwrap_or("detached");
     format!(
-        "  Skipping recent worktree '{}' (branch: {branch_label}): created less than {min_age} ago.",
-        wt.path.display()
+        "  Skipping recent worktree '{}' (branch: {branch_label}): changed less than {min_age} ago.",
+        tilde_path(&wt.path)
     )
 }
 
@@ -1292,7 +1319,7 @@ fn format_too_small_skip_message(wt: &Worktree, min_size: Size) -> String {
     let branch_label = wt.branch.as_deref().unwrap_or("detached");
     format!(
         "  Skipping small worktree '{}' (branch: {branch_label}): smaller than {min_size}.",
-        wt.path.display()
+        tilde_path(&wt.path)
     )
 }
 
@@ -1316,8 +1343,10 @@ fn remove_worktree(
     if use_worktrunk {
         // `wt remove` takes a branch or a path in the same slot; fall back to
         // the path for detached-HEAD worktrees and orphans.
-        let path = wt.path.to_string_lossy();
-        let target = wt.branch.as_deref().unwrap_or(&path);
+        let target = match wt.branch.as_deref() {
+            Some(branch) => branch,
+            None => crate::git::path_arg(&wt.path)?,
+        };
         git.worktrunk_remove(target, force, force_delete)
     } else {
         git.worktree_remove(&wt.path, force)
@@ -1721,7 +1750,7 @@ mod tests {
         let ui = Ui::new();
         let opts = opts_yes_skip_network();
 
-        run(&git, &config, &ui, &opts)?;
+        let report = run(&git, &config, &ui, &opts)?;
 
         // The locked worktree directory should still exist
         assert!(
@@ -1729,15 +1758,25 @@ mod tests {
             "locked worktree should not be removed"
         );
 
-        // The branch cannot be deleted because it's still checked out
-        // in the locked worktree — git refuses to delete it. This is
-        // expected: the worktree removal was skipped, so the branch
-        // deletion also fails gracefully (logged as a warning).
+        // The branch is still checked out in the locked worktree, so it is
+        // left alone along with the worktree rather than failing to delete.
         let branches = git.local_branches()?;
         assert!(
             branches.contains(&"feature/locked-wt".to_string()),
-            "branch should survive because its locked worktree prevents deletion"
+            "branch should survive because its locked worktree is kept"
         );
+        assert!(
+            report.errors.is_empty(),
+            "skipping the branch must not record a failed deletion, got {:?}",
+            report.errors
+        );
+        let entry = report
+            .local
+            .branches
+            .iter()
+            .find(|b| b.branch == "feature/locked-wt")
+            .expect("branch is still reported");
+        assert_eq!(entry.status, ItemStatus::Skipped);
         Ok(())
     }
 

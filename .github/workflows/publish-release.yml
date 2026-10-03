@@ -131,7 +131,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # The source tarball is what distribution packagers build from — the
-  # `git-wipe` and `git-wipe-git` AUR packages consume it. It is
+  # `git-wipe` AUR package consumes it. It is
   # published here rather than relying on GitHub's auto-generated tag archive,
   # whose bytes (and therefore its checksum) are not guaranteed to be stable
   # over time, which a PKGBUILD's `sha256sums` cannot tolerate.

@@ -196,11 +196,35 @@ fn is_unset_key(err: &anyhow::Error) -> bool {
         .is_some_and(|gerr| gerr.exit_code == Some(1))
 }
 
+/// Parse a boolean the way `git config --type=bool` does: `true`, `yes`, `on`
+/// and `1` against `false`, `no`, `off` and `0`, case-insensitively.
+///
+/// `None` for anything else, so callers can reject a typo instead of silently
+/// reading it as `false`.
+pub fn parse_git_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Some(true),
+        "false" | "no" | "off" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether a `git config --unset` failure just means "there was nothing to
+/// unset".
+///
+/// `--unset` and `--unset-all` exit 5 when the key is absent. Anything else — a
+/// locked or unwritable config file, a broken repository — is a real failure
+/// that must not be reported as a successful unset.
+fn is_unset_noop(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<GitCommandError>()
+        .is_some_and(|gerr| gerr.exit_code == Some(5))
+}
+
 /// Render a path as a git command-line argument.
 ///
 /// git arguments must be UTF-8; a path that is not is a hard error rather than
 /// something to silently mangle with `to_string_lossy`.
-fn path_arg(path: &Path) -> Result<&str> {
+pub fn path_arg(path: &Path) -> Result<&str> {
     path.to_str()
         .with_context(|| format!("path is not valid UTF-8: {}", path.display()))
 }
@@ -308,6 +332,17 @@ impl Git {
             .take()
             .with_context(|| format!("failed to capture stdout of: git {}", first.join(" ")))?;
 
+        // Drain stderr concurrently: left unread, a chatty first command could
+        // fill the pipe and block, which would stall the second one on EOF.
+        let first_stderr = first_child.stderr.take().map(|mut stderr| {
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut buf = Vec::new();
+                let _ = stderr.read_to_end(&mut buf);
+                buf
+            })
+        });
+
         let mut second_cmd = Command::new("git");
         second_cmd.args(second);
         if let Some(dir) = &self.workdir {
@@ -327,15 +362,19 @@ impl Git {
             .wait()
             .with_context(|| format!("failed to wait for: git {}", first.join(" ")))?;
 
-        if !first_status.success() {
-            anyhow::bail!(
-                "git {} failed (exit status: {})",
-                first.join(" "),
-                first_status
-                    .code()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "signal".into())
-            );
+        let first_output = std::process::Output {
+            status: first_status,
+            stdout: Vec::new(),
+            stderr: first_stderr
+                .map(|handle| handle.join().unwrap_or_default())
+                .unwrap_or_default(),
+        };
+        if !first_output.status.success() {
+            return Err(anyhow::Error::new(command_error(
+                "git",
+                first,
+                &first_output,
+            )));
         }
         if !second_output.status.success() {
             return Err(anyhow::Error::new(command_error(
@@ -346,7 +385,7 @@ impl Git {
         }
 
         Ok(String::from_utf8_lossy(&second_output.stdout)
-            .trim_end()
+            .trim()
             .to_string())
     }
 
@@ -721,9 +760,9 @@ impl Git {
     /// `true` after the target has advanced with unrelated commits that
     /// touch different files.
     ///
-    /// Returns `Ok(false)` when the merge would conflict (non-zero exit) or
-    /// when the resulting tree differs from `target`'s tree. Requires
-    /// `git >= 2.38` for the `--write-tree` option.
+    /// Returns `Ok(false)` when the merge would conflict (exit 1) or when the
+    /// resulting tree differs from `target`'s tree. Any other failure is an
+    /// error. Requires `git >= 2.38` for the `--write-tree` option.
     pub fn merge_adds_nothing(&self, target: &str, branch: &str) -> Result<bool> {
         let args = ["merge-tree", "--write-tree", target, branch];
         let output = self.spawn(&args)?;
@@ -738,11 +777,15 @@ impl Git {
                 let target_tree = self.run(&["rev-parse", &format!("{target}^{{tree}}")])?;
                 Ok(merged_tree == target_tree.trim())
             }
-            // Non-zero exit: typically conflicts (exit 1). Treat as "merge
-            // would add something" rather than an error, so callers can keep
-            // probing other strategies.
-            Some(_) => Ok(false),
-            None => Err(anyhow::Error::new(command_error("git", &args, &output))),
+            // Exit 1: the merge conflicts. Treat as "merge would add
+            // something" rather than an error, so callers can keep probing
+            // other strategies.
+            Some(1) => Ok(false),
+            // Anything else (129 on git < 2.38 which lacks `--write-tree`,
+            // 128 for a fatal error, a signal) is a real failure, propagated so
+            // the caller can surface it instead of silently reading "not
+            // merged".
+            _ => Err(anyhow::Error::new(command_error("git", &args, &output))),
         }
     }
 
@@ -1036,9 +1079,12 @@ impl Git {
     /// Uses `--local` to target the shared `.git/config`.
     /// See [`config_set`](Self::config_set) for rationale.
     pub fn config_unset_all(&self, key: &str) -> Result<()> {
-        // --unset-all exits non-zero if the key doesn't exist; that's fine.
-        let _ = self.run(&["config", "--local", "--unset-all", key]);
-        Ok(())
+        // --unset-all exits 5 if the key doesn't exist; that's fine.
+        match self.run(&["config", "--local", "--unset-all", key]) {
+            Ok(_) => Ok(()),
+            Err(e) if is_unset_noop(&e) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Remove a single value from a multi-valued config key, preserving the
@@ -1086,7 +1132,7 @@ impl Git {
                     // Each line: "branch.<name>.<suffix> true"
                     let mut parts = line.splitn(2, ' ');
                     if let (Some(key), Some(value)) = (parts.next(), parts.next())
-                        && value.trim().eq_ignore_ascii_case("true")
+                        && parse_git_bool(value) == Some(true)
                     {
                         // Extract branch name from "branch.<name>.<suffix>"
                         if let Some(name) = key
@@ -1113,8 +1159,12 @@ impl Git {
         if enabled {
             self.run(&["config", "--local", &key, "true"])?;
         } else {
-            // --unset exits non-zero if the key doesn't exist; that's fine.
-            let _ = self.run(&["config", "--local", "--unset", &key]);
+            // --unset exits 5 if the key doesn't exist; that's fine.
+            match self.run(&["config", "--local", "--unset", &key]) {
+                Ok(_) => {}
+                Err(e) if is_unset_noop(&e) => {}
+                Err(e) => return Err(e),
+            }
         }
         Ok(())
     }
@@ -2391,6 +2441,30 @@ locked work in progress, do not remove
         // Verify from the main worktree
         let protected = git_main.config_get_all("wipe.protected")?;
         assert!(protected.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_unset_all_tolerates_a_missing_key() -> Result<()> {
+        let (_dir, git) = crate::test_helpers::init_repo()?;
+
+        git.config_unset_all("wipe.never-set")?;
+        git.set_branch_protected("never-flagged", false)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_unset_all_reports_a_locked_config_file() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        git.config_add("wipe.protected", "main")?;
+
+        // A stale lock file makes every config write fail.
+        std::fs::write(dir.path().join(".git/config.lock"), "")?;
+
+        assert!(git.config_unset_all("wipe.protected").is_err());
+        assert!(git.set_branch_protected("main", false).is_err());
 
         Ok(())
     }

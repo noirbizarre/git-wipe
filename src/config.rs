@@ -2,7 +2,7 @@
 //!
 //! Configuration is read from any git config scope but always written to the
 //! repository-local `.git/config`. [`Config::try_load`] returns `None` when the
-//! section is absent, which is what triggers [`run_setup_wizard`].
+//! section is absent, which is what triggers the wizard in [`load_or_setup`].
 
 use anyhow::{Context, Result};
 
@@ -15,6 +15,11 @@ use crate::ui::Ui;
 
 /// The git config section name used for all git-wipe settings.
 pub const SECTION: &str = "wipe";
+
+/// The question asked, by the wizard and at run time alike, before worktrunk
+/// is used for worktree removal.
+pub const WORKTRUNK_PROMPT: &str =
+    "Worktrunk (wt) detected. Use it for worktree removal (triggers pre/post-remove hooks)?";
 
 /// Split a comma-separated prompt answer into trimmed, non-empty patterns.
 fn parse_patterns(input: &str) -> Vec<String> {
@@ -40,6 +45,48 @@ fn parse_jobs(input: &str) -> Result<u32> {
         anyhow::bail!("must be at least 1");
     }
     Ok(jobs)
+}
+
+/// Parse a `wipe.worktrunk` value with git's own boolean spellings.
+fn parse_bool(input: &str) -> Result<bool> {
+    crate::git::parse_git_bool(input).with_context(|| {
+        format!("'{input}' is not a boolean (use true/false, yes/no, on/off or 1/0)")
+    })
+}
+
+/// Check that `value` is acceptable for the `[wipe]` key `key`, using the same
+/// parsers as [`Config::try_load`].
+///
+/// `config set` runs this before writing, so a bad value is refused up front
+/// instead of making every later command fail with "invalid wipe.<key>".
+/// Unknown keys are refused too: they would be written and then ignored.
+pub fn validate_value(key: &str, value: &str) -> Result<()> {
+    match key {
+        "protected" | "ignore" | "remote" => {}
+        "worktrunk" => {
+            parse_bool(value)?;
+        }
+        "effort" => {
+            value.parse::<Effort>()?;
+        }
+        "minage" => {
+            value.parse::<MinAge>()?;
+        }
+        "minsize" => {
+            value.parse::<Size>()?;
+        }
+        "jobs" => {
+            parse_jobs(value)?;
+        }
+        "forge" => {
+            value.parse::<ForgeSetting>()?;
+        }
+        _ => anyhow::bail!(
+            "unknown key '{key}', expected one of: protected, ignore, remote, worktrunk, \
+             effort, minage, minsize, jobs, forge"
+        ),
+    }
+    Ok(())
 }
 
 /// Stored configuration from the `[wipe]` git config section.
@@ -73,13 +120,13 @@ pub struct Config {
     pub forge: Option<ForgeSetting>,
 }
 
-/// A conventional starting point, **not** the value git-wipe falls back to at
-/// runtime.
+/// A conventional starting point: `main` and `master` protected.
 ///
-/// Production never reaches this: [`Config::try_load`] either returns the
+/// A wipe run never reaches this: [`Config::try_load`] either returns the
 /// stored configuration or `None`, and `None` runs the setup wizard, whose own
-/// fallback is `main` alone. The extra `master` here exists so tests and
-/// external callers get a sensible two-branch default.
+/// fallback is `main` alone. The one runtime user is `git wipe status` in a
+/// repository that was never configured, which falls back to this rather than
+/// prompting; tests use it too.
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -117,7 +164,9 @@ impl Config {
 
         let worktrunk = git
             .config_get(&format!("{SECTION}.worktrunk"))?
-            .map(|v| v.eq_ignore_ascii_case("true"));
+            .map(|v| parse_bool(&v))
+            .transpose()
+            .with_context(|| format!("invalid {SECTION}.worktrunk in git config"))?;
 
         let effort = git
             .config_get(&format!("{SECTION}.effort"))?
@@ -253,8 +302,18 @@ impl Config {
     /// Run the interactive setup wizard.
     ///
     /// Auto-detects branches and remotes, then asks the user to confirm/edit.
+    ///
+    /// When re-run on an already configured repository, the settings the
+    /// wizard does not ask about are carried over rather than reset.
     pub fn interactive_setup(git: &Git, ui: &Ui) -> Result<Self> {
-        ui.heading("No configuration found. Let's set up git-wipe.");
+        // An unreadable existing configuration must not lock the user out of
+        // the very command that rewrites it.
+        let existing = Self::try_load(git).ok().flatten();
+        if existing.is_some() {
+            ui.heading("Reconfiguring git-wipe.");
+        } else {
+            ui.heading("No configuration found. Let's set up git-wipe.");
+        }
         ui.blank();
 
         // ── Protected branches ───────────────────────────────────────
@@ -336,38 +395,38 @@ impl Config {
         // ── Worktrunk integration ────────────────────────────────────
         let worktrunk = if crate::git::worktrunk_available() {
             ui.blank();
-            let use_wt = ui.confirm(
-                "Worktrunk (wt) detected. Use it for worktree removal (triggers pre/post-remove hooks)?",
-                true,
-            )?;
+            let use_wt = ui.confirm(WORKTRUNK_PROMPT, true)?;
             Some(use_wt)
         } else {
             None
         };
 
         // ── Forge ────────────────────────────────────────────────────
-        let forge = forge_step(git, ui);
+        let forge = forge_step(git, ui, existing.as_ref().and_then(|c| c.forge));
 
         // ── Save ─────────────────────────────────────────────────────
 
-        // Effort, min age and min size are deliberately not asked here: they
-        // are power-user knobs with sensible defaults, set later with
+        // Effort, min age, min size and jobs are deliberately not asked here:
+        // they are power-user knobs with sensible defaults, set later with
         // `git wipe config set effort <n>` / `... set minage <duration>` /
-        // `... set minsize <size>`.
+        // `... set minsize <size>` / `... set jobs <n>`. Whatever a previous
+        // run or `config set` stored is kept.
         let config = Self {
             protected,
             ignore,
             remotes,
             worktrunk,
-            effort: None,
-            min_age: None,
-            min_size: None,
-            jobs: None,
+            effort: existing.as_ref().and_then(|c| c.effort),
+            min_age: existing.as_ref().and_then(|c| c.min_age),
+            min_size: existing.as_ref().and_then(|c| c.min_size),
+            jobs: existing.as_ref().and_then(|c| c.jobs),
             forge,
         };
         config.save(git)?;
 
-        ui.success("Configuration saved to git config [wipe] section.");
+        ui.success(&format!(
+            "Configuration saved to git config [{SECTION}] section."
+        ));
         ui.blank();
 
         Ok(config)
@@ -379,16 +438,20 @@ impl Config {
 /// Only identifies forges from remote URLs: nothing is contacted, so it works
 /// offline and with no credentials. Setup must never fail because of it, so
 /// every problem here, a failed prompt included, just means "not enabled".
-fn forge_step(git: &Git, ui: &Ui) -> Option<ForgeSetting> {
+///
+/// `current` is the setting already in place (a re-run of the wizard). With
+/// nothing detected there is nothing to ask, so it is kept as it is rather than
+/// wiped; otherwise it only picks the default answer.
+fn forge_step(git: &Git, ui: &Ui, current: Option<ForgeSetting>) -> Option<ForgeSetting> {
     let remotes = git.remotes().unwrap_or_default();
     let detections = forge::detect_remotes(git, &remotes);
     if detections.is_empty() {
-        return None;
+        return current;
     }
 
     ui.blank();
     let question = forge_question(&detections);
-    match ui.confirm(&question, false) {
+    match ui.confirm(&question, current.is_some()) {
         Ok(true) => Some(ForgeSetting::Auto),
         _ => None,
     }
@@ -434,6 +497,61 @@ pub fn load_or_setup(git: &Git, ui: &Ui) -> Result<Config> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_value_accepts_what_try_load_accepts() {
+        for (key, value) in [
+            ("protected", "release/*"),
+            ("ignore", "wip/*"),
+            ("remote", "origin"),
+            ("worktrunk", "yes"),
+            ("worktrunk", "false"),
+            ("effort", "3"),
+            ("minage", "2h"),
+            ("minsize", "100M"),
+            ("jobs", "4"),
+            ("forge", "gitlab"),
+        ] {
+            assert!(
+                validate_value(key, value).is_ok(),
+                "{key}={value} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_value_rejects_bad_values_and_unknown_keys() {
+        for (key, value) in [
+            ("worktrunk", "maybe"),
+            ("effort", "9"),
+            ("minage", "soon"),
+            ("minsize", "big"),
+            ("jobs", "0"),
+            ("forge", "bitbucket"),
+            ("nonsense", "x"),
+        ] {
+            assert!(
+                validate_value(key, value).is_err(),
+                "{key}={value} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn worktrunk_uses_git_boolean_spellings() -> Result<()> {
+        let (_dir, git) = crate::test_helpers::init_repo()?;
+        git.config_add("wipe.protected", "main")?;
+
+        git.config_set("wipe.worktrunk", "on")?;
+        assert_eq!(Config::try_load(&git)?.unwrap().worktrunk, Some(true));
+
+        git.config_set("wipe.worktrunk", "no")?;
+        assert_eq!(Config::try_load(&git)?.unwrap().worktrunk, Some(false));
+
+        git.config_set("wipe.worktrunk", "maybe")?;
+        assert!(Config::try_load(&git).is_err());
+        Ok(())
+    }
 
     #[test]
     fn config_load_returns_none_when_not_configured() -> Result<()> {

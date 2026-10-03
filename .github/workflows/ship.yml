@@ -91,7 +91,7 @@ jobs:
       && github.repository_owner == 'noirbizarre'
     runs-on: ubuntu-latest
     # `gh ship release` waits on the publish workflow, which cross-compiles
-    # eight targets and publishes the crate — so this is the job most likely to
+    # nine targets and publishes the crate — so this is the job most likely to
     # run long. Capped below 60 on purpose: an App installation token expires
     # after an hour, and a job that outlives its own token fails at whichever
     # `gh` call happens to land after the deadline. Also below gh-ship's own

@@ -55,7 +55,7 @@ pub enum ItemStatus {
     Skipped,
     /// Worktree is locked, so it was left alone.
     Locked,
-    /// Worktree is newer than `--min-age`, so it was left alone.
+    /// Worktree changed more recently than `--min-age`, so it was left alone.
     TooYoung,
     /// Worktree is smaller than `--min-size`, so it was left alone.
     TooSmall,
