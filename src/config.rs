@@ -253,8 +253,18 @@ impl Config {
     /// Run the interactive setup wizard.
     ///
     /// Auto-detects branches and remotes, then asks the user to confirm/edit.
+    ///
+    /// When re-run on an already configured repository, the settings the
+    /// wizard does not ask about are carried over rather than reset.
     pub fn interactive_setup(git: &Git, ui: &Ui) -> Result<Self> {
-        ui.heading("No configuration found. Let's set up git-wipe.");
+        // An unreadable existing configuration must not lock the user out of
+        // the very command that rewrites it.
+        let existing = Self::try_load(git).ok().flatten();
+        if existing.is_some() {
+            ui.heading("Reconfiguring git-wipe.");
+        } else {
+            ui.heading("No configuration found. Let's set up git-wipe.");
+        }
         ui.blank();
 
         // ── Protected branches ───────────────────────────────────────
@@ -346,23 +356,24 @@ impl Config {
         };
 
         // ── Forge ────────────────────────────────────────────────────
-        let forge = forge_step(git, ui);
+        let forge = forge_step(git, ui, existing.as_ref().and_then(|c| c.forge));
 
         // ── Save ─────────────────────────────────────────────────────
 
-        // Effort, min age and min size are deliberately not asked here: they
-        // are power-user knobs with sensible defaults, set later with
+        // Effort, min age, min size and jobs are deliberately not asked here:
+        // they are power-user knobs with sensible defaults, set later with
         // `git wipe config set effort <n>` / `... set minage <duration>` /
-        // `... set minsize <size>`.
+        // `... set minsize <size>` / `... set jobs <n>`. Whatever a previous
+        // run or `config set` stored is kept.
         let config = Self {
             protected,
             ignore,
             remotes,
             worktrunk,
-            effort: None,
-            min_age: None,
-            min_size: None,
-            jobs: None,
+            effort: existing.as_ref().and_then(|c| c.effort),
+            min_age: existing.as_ref().and_then(|c| c.min_age),
+            min_size: existing.as_ref().and_then(|c| c.min_size),
+            jobs: existing.as_ref().and_then(|c| c.jobs),
             forge,
         };
         config.save(git)?;
@@ -379,16 +390,20 @@ impl Config {
 /// Only identifies forges from remote URLs: nothing is contacted, so it works
 /// offline and with no credentials. Setup must never fail because of it, so
 /// every problem here, a failed prompt included, just means "not enabled".
-fn forge_step(git: &Git, ui: &Ui) -> Option<ForgeSetting> {
+///
+/// `current` is the setting already in place (a re-run of the wizard). With
+/// nothing detected there is nothing to ask, so it is kept as it is rather than
+/// wiped; otherwise it only picks the default answer.
+fn forge_step(git: &Git, ui: &Ui, current: Option<ForgeSetting>) -> Option<ForgeSetting> {
     let remotes = git.remotes().unwrap_or_default();
     let detections = forge::detect_remotes(git, &remotes);
     if detections.is_empty() {
-        return None;
+        return current;
     }
 
     ui.blank();
     let question = forge_question(&detections);
-    match ui.confirm(&question, false) {
+    match ui.confirm(&question, current.is_some()) {
         Ok(true) => Some(ForgeSetting::Auto),
         _ => None,
     }
