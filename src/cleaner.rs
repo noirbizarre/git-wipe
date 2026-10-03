@@ -1338,8 +1338,10 @@ fn remove_worktree(
     if use_worktrunk {
         // `wt remove` takes a branch or a path in the same slot; fall back to
         // the path for detached-HEAD worktrees and orphans.
-        let path = wt.path.to_string_lossy();
-        let target = wt.branch.as_deref().unwrap_or(&path);
+        let target = match wt.branch.as_deref() {
+            Some(branch) => branch,
+            None => crate::git::path_arg(&wt.path)?,
+        };
         git.worktrunk_remove(target, force, force_delete)
     } else {
         git.worktree_remove(&wt.path, force)

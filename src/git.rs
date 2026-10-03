@@ -200,7 +200,7 @@ fn is_unset_key(err: &anyhow::Error) -> bool {
 ///
 /// git arguments must be UTF-8; a path that is not is a hard error rather than
 /// something to silently mangle with `to_string_lossy`.
-fn path_arg(path: &Path) -> Result<&str> {
+pub fn path_arg(path: &Path) -> Result<&str> {
     path.to_str()
         .with_context(|| format!("path is not valid UTF-8: {}", path.display()))
 }
