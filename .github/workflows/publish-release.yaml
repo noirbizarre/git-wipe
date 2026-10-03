@@ -1,0 +1,301 @@
+
+name: 📦 Publish Release
+
+# Dispatched by `gh ship release` on the tag it just created — naming the run
+# after it tells the two apart in the Actions run list, where "Publish
+# Release" alone would not.
+run-name: 📦 Publish Release ${{ inputs.tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag being released
+        required: true
+        type: string
+
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+# The upload authenticates as a GitHub App and carries its own permissions.
+# These cover `actions/checkout` alone, which only reads.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Retries against a flaky registry/network rather than failing a release
+  # build outright, and no incremental cache — this is a one-shot build, so
+  # there is nothing later to reuse it.
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_NET_RETRY: "10"
+  RUSTUP_MAX_RETRIES: "10"
+  # Same bar CI's clippy job already holds the code to; a release binary
+  # should not ship a warning CI would have failed on for anyone else.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  build:
+    name: 🏗️ ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # `ext` is emitted on every leg, empty where it does not apply. Omitting
+        # it on the non-Windows ones would make `${{ matrix.ext }}` reference a
+        # property that is not in the matrix type whenever no Windows target is
+        # selected — an actionlint error, not a runtime one, so it would only
+        # surface in the consuming project's CI.
+        include:
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-latest, asset: linux-amd64, cross: true, ext: "" }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-latest, asset: linux-arm64, cross: true, ext: "" }
+          - { target: x86_64-unknown-linux-musl, runner: ubuntu-latest, asset: linux-amd64-musl, cross: true, ext: "" }
+          - { target: aarch64-unknown-linux-musl, runner: ubuntu-latest, asset: linux-arm64-musl, cross: true, ext: "" }
+          - { target: x86_64-apple-darwin, runner: macos-latest, asset: darwin-amd64, cross: false, ext: "" }
+          - { target: aarch64-apple-darwin, runner: macos-latest, asset: darwin-arm64, cross: false, ext: "" }
+          - { target: x86_64-pc-windows-msvc, runner: windows-latest, asset: windows-amd64, cross: false, ext: ".exe" }
+          - { target: aarch64-pc-windows-msvc, runner: windows-11-arm, asset: windows-arm64, cross: false, ext: ".exe" }
+          - { target: x86_64-unknown-freebsd, runner: ubuntu-latest, asset: freebsd-amd64, cross: true, ext: "" }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Build exactly what is being released, not a branch tip that
+          # may have moved since.
+          ref: ${{ inputs.tag }}
+          # The upload authenticates via a separately-installed `gh`; nothing
+          # in this job shells out to `git push`.
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      # `cross` is only needed on the Linux legs, so it is installed
+      # conditionally here rather than added to mise.toml, which would pull it
+      # onto every runner in the matrix. It also supplies the cross C toolchain
+      # that any vendored C dependency needs.
+      - uses: taiki-e/install-action@cross
+        if: matrix.cross
+
+      # Without this a standalone MSVC binary can fail to start on a machine
+      # that lacks the matching Visual C++ Redistributable — exactly the
+      # machine a downloaded release binary targets. Static linking trades a
+      # few hundred KB for not depending on that being installed.
+      - name: Statically link the MSVC C runtime
+        if: endsWith(matrix.target, 'windows-msvc')
+        shell: bash
+        run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=+crt-static" >> "${GITHUB_ENV}"
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+
+      - name: Stage the asset
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/git-wipe${{ matrix.ext }}" \
+             "dist/git-wipe_${{ inputs.tag }}_${{ matrix.asset }}${{ matrix.ext }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: asset-${{ matrix.asset }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: 🚀 Publish
+    needs: build
+    runs-on: ubuntu-latest
+
+    # This is the deployment. Declaring a `url:` registers it in the
+    # repository's deployment list and links straight to what shipped.
+    # The environment is `release` because that is where the release
+    # secrets live.
+    environment:
+      name: release
+      url: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ inputs.tag }}
+
+    steps:
+      # An installation token, revoked when this job ends. It cannot live in
+      # the job's `env:` — a step output is not resolvable there — so the one
+      # `gh` step below sets it itself.
+      - uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          # The upload below authenticates with the App token, not a
+          # persisted checkout credential.
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: asset-*
+          merge-multiple: true
+          path: dist
+
+      # The man pages and completions are plain text, identical for every
+      # target, so they are generated once here by the host build rather than
+      # on each cross-compiled leg (which could not run its own build script).
+      # Output lands in `stage/man` and `stage/completions`, which the archive
+      # step below picks up. A project that generates them differently — a
+      # `completions` subcommand, say — adds its own step before that one,
+      # filling the same two directories.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate man pages and completions
+        run: |
+          set -euo pipefail
+          out=$(cargo build --locked --message-format=json 2>/dev/null \
+            | jq -r 'select(.reason == "build-script-executed") | select(.package_id | test("git-wipe")) | .out_dir' \
+            | tail -n 1)
+          test -n "$out" || { echo "could not locate OUT_DIR" >&2; exit 1; }
+          mkdir -p stage/man stage/completions
+          cp "$out"/man/*.1 stage/man/
+          cp "$out"/completions/* stage/completions/
+
+      # The native-package layout: the executable under `bin/` and everything
+      # else where a package manager would put it, so unpacking at a prefix
+      # (`tar -xzf ... --strip-components=1 -C /usr/local`) is an install. The
+      # raw binaries stay published as they are: cargo-binstall and `gh`
+      # extensions fetch them by name.
+      #
+      # Optional files are taken from where a project stages them
+      # (`stage/man`, `stage/completions`) and skipped when absent.
+      #
+      # Every flag below exists so the same inputs give the same bytes: a fixed
+      # order, the commit time for every mtime, no owner, and `gzip -n` so the
+      # gzip header carries neither a name nor a clock.
+      #
+      # Windows has no tarball: its asset is the `.exe`, which needs no layout.
+      - name: Package the Unix binaries
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          # `install -D` creates parent directories with the umask's mode.
+          umask 022
+          epoch="$(git log -1 --format=%ct)"
+          assets=(linux-amd64 linux-arm64 linux-amd64-musl linux-arm64-musl darwin-amd64 darwin-arm64 freebsd-amd64 )
+          for asset in "${assets[@]}"; do
+            name="git-wipe-${TAG}-${asset}"
+            root="stage/${name}"
+            # <mode> <source> <path in the archive>; a missing source is skipped.
+            put() { if [ -f "$2" ]; then install -D -m "$1" "$2" "${root}/$3"; fi; }
+            install -D -m 755 "dist/git-wipe_${TAG}_${asset}" "${root}/bin/git-wipe"
+            install -D -m 644 LICENSE "${root}/share/doc/git-wipe/LICENSE"
+            install -D -m 644 README.md "${root}/share/doc/git-wipe/README.md"
+            for page in stage/man/*.1; do
+              put 644 "${page}" "share/man/man1/$(basename "${page}")"
+            done
+            put 644 stage/completions/git-wipe.bash "share/bash-completion/completions/git-wipe"
+            put 644 stage/completions/_git-wipe "share/zsh/site-functions/_git-wipe"
+            put 644 stage/completions/git-wipe.fish "share/fish/vendor_completions.d/git-wipe.fish"
+            tar -C stage --sort=name --format=gnu --mtime="@${epoch}" \
+              --owner=0 --group=0 --numeric-owner -cf - "${name}" \
+              | gzip -n -9 > "dist/git-wipe_${TAG}_${asset}.tar.gz"
+          done
+
+      - name: Checksums
+        working-directory: dist
+        # `--` so an asset whose name begins with a dash is treated as a
+        # file rather than an option (shellcheck SC2035).
+        run: sha256sum -- * > SHA256SUMS
+
+      # The release already exists as a DRAFT: gh-ship created it before
+      # dispatching this workflow, and will undraft it once we succeed.
+      # That ordering is what lets assets land before anyone is notified.
+      - name: Upload assets to the draft release
+        run: gh release upload "${{ inputs.tag }}" dist/* --clobber
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+  # Last, deliberately. Publishing to crates.io cannot be undone — `cargo yank`
+  # hides a version from resolution but never removes it, and the version number
+  # is spent forever. So it happens only once every target has proven the code
+  # compiles and the assets are on the release: if this job then fails,
+  # re-running it costs nothing, whereas the reverse ordering could leave a
+  # permanent crates.io release with no binaries behind it.
+  crates:
+    name: 📦 crates.io
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+
+    # Must match the Environment configured under
+    # crates.io -> git-wipe -> Settings -> Trusted Publishing. crates.io
+    # checks the OIDC claim against it, and a mismatch is a 403 at publish time
+    # rather than anything visible earlier.
+    environment:
+      name: release
+
+    permissions:
+      # The only permission Trusted Publishing needs: it mints the OIDC token
+      # that is exchanged for a short-lived crates.io token. No API key is
+      # stored anywhere, and nothing here writes to the repository.
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The tag, not the branch tip. `cargo publish` packages the working
+          # tree, so this is what decides which code reaches crates.io.
+          ref: ${{ inputs.tag }}
+          # `cargo publish` authenticates via Trusted Publishing's OIDC
+          # token, not a persisted checkout credential.
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # `cargo publish` fails outright on a version that already exists, which
+      # turns an ordinary "re-run failed jobs" into a stuck release: gh-ship
+      # waits on this workflow and only undrafts the release when it succeeds.
+      # A version can be uploaded and the job still fail afterwards, so this
+      # makes the re-run a no-op rather than an error.
+      #
+      # `inputs.tag` is the version: this project tags without a `v` prefix, and
+      # prepare-release derives both from one string.
+      - name: Check whether this version is already published
+        id: existing
+        run: |
+          set -euo pipefail
+          url="https://crates.io/api/v1/crates/git-wipe/${{ inputs.tag }}"
+          if curl -sfL --retry 3 -H "User-Agent: git-wipe-release" "$url" > /dev/null; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::git-wipe ${{ inputs.tag }} is already on crates.io; skipping."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Exchanges the workflow's OIDC identity for a crates.io token that
+      # lives 30 minutes, and revokes it in a post step when the job ends.
+      # Skipped when there is nothing to publish, so no token is minted for a
+      # job that will do nothing with it.
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+        if: steps.existing.outputs.published == 'false'
+
+      # `--locked` so the published build resolves exactly the dependencies
+      # Cargo.lock records. Without it a yanked or newly-broken transitive
+      # dependency could change what is verified here versus what was tested.
+      - name: Publish to crates.io
+        if: steps.existing.outputs.published == 'false'
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

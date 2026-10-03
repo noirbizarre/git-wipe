@@ -1,0 +1,17 @@
+# nextest configuration.
+
+[profile.default]
+# A slow test is normal on a cold cache; a hung one is not. Four consecutive
+# 30-second periods without progress is a hang, and killing it turns a job that
+# would burn the full runner timeout into one that fails in two minutes.
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+[profile.ci]
+# CI wants the full picture from one run, not the first failure.
+fail-fast = false
+failure-output = "immediate-final"
+status-level = "skip"
+final-status-level = "slow"
+
+[profile.ci.junit]
+path = "junit.xml"

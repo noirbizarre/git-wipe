@@ -1,0 +1,20 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.rs]
+indent_size = 4
+
+[*.{toml,yml,yaml,json}]
+indent_size = 2
+
+[*.md]
+indent_size = 2
+# The one line-width convention `mise run lint:md` enforces mechanically —
+# surfaced here too, as a ruler in editors that honor max_line_length.
+max_line_length = 120

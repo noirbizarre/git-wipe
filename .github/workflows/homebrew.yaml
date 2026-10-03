@@ -1,0 +1,111 @@
+name: 🍺 Homebrew
+
+# Updates the formula in the tap once a release is public. The trigger is
+# `release: published` rather than the completion of 📦 Publish Release,
+# because gh-ship only undrafts the release after that workflow succeeds — so
+# waiting for `published` means the URLs baked into the formula already
+# resolve when it lands in the tap.
+run-name: 🍺 Homebrew ${{ inputs.tag || github.event.release.tag_name }}
+
+on:
+  release:
+    types: [published]
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to publish to the tap
+        required: true
+        type: string
+
+# The push to the tap authenticates with its own token. This covers
+# `actions/checkout` and the `gh release download` calls, which only read.
+permissions:
+  contents: read
+
+jobs:
+  homebrew:
+    name: 🍺 Formula
+    runs-on: ubuntu-latest
+
+    # A dedicated environment: the token that can write to the tap is scoped to
+    # it rather than sitting next to the GitHub App credentials in `release`,
+    # and the update is registered as its own deployment.
+    environment:
+      name: homebrew
+      url: https://github.com/noirbizarre/homebrew-tap
+
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The push below uses TAP_TOKEN, not the checkout credential, and a
+          # stored credential here would be offered to the tap clone by accident.
+          persist-credentials: false
+
+      - name: Render the formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p build assets
+          cp packaging/homebrew/git-wipe.rb build/git-wipe.rb
+
+          # This project tags without a `v` prefix, so the tag is the version.
+          sed -i "s/@VERSION@/${TAG}/" build/git-wipe.rb
+
+          # Checksums are computed from the published assets themselves rather
+          # than read out of SHA256SUMS, so a disagreement between the two
+          # cannot reach the tap.
+          checksum() {
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$1" --dir assets >&2
+            sha256sum "assets/$1" | cut -d' ' -f1
+          }
+
+          declare -A targets=(
+            [DARWIN_ARM64]="git-wipe_${TAG}_darwin-arm64.tar.gz"
+            [DARWIN_AMD64]="git-wipe_${TAG}_darwin-amd64.tar.gz"
+            [LINUX_AMD64_MUSL]="git-wipe_${TAG}_linux-amd64-musl.tar.gz"
+            [LINUX_ARM64_MUSL]="git-wipe_${TAG}_linux-arm64-musl.tar.gz"
+          )
+          for placeholder in "${!targets[@]}"; do
+            sha256=$(checksum "${targets[$placeholder]}")
+            sed -i "s/@SHA256_${placeholder}@/${sha256}/" build/git-wipe.rb
+          done
+
+          # A leftover placeholder means an asset was renamed upstream and the
+          # formula would install nothing: fail here rather than in the tap.
+          if grep -q '@[A-Z0-9_]*@' build/git-wipe.rb; then
+            echo "::error::unsubstituted placeholder left in the formula"
+            exit 1
+          fi
+
+          cat build/git-wipe.rb
+
+      - name: Push to the tap
+        env:
+          # A token with `contents: write` on the tap repository only.
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/noirbizarre/homebrew-tap.git" tap
+
+          cd tap
+          mkdir -p Formula
+          cp ../build/git-wipe.rb Formula/git-wipe.rb
+
+          git config user.name 'git-wipe release bot'
+          git config user.email 'noirbizarre@users.noreply.github.com'
+
+          # Compare the index, not the worktree: `git diff` alone ignores
+          # untracked files, so the very first import would look like a no-op.
+          git add Formula/git-wipe.rb
+          if git diff --cached --quiet; then
+            echo "::notice::the tap already carries git-wipe ${TAG}"
+            exit 0
+          fi
+
+          git commit -m "git-wipe ${TAG}"
+          git push

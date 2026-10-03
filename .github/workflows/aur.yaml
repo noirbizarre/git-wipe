@@ -1,0 +1,171 @@
+name: 📦 AUR
+
+# Publishes the -bin package once a release is public. The trigger is
+# `release: published` rather than the completion of 📦 Publish Release,
+# because gh-ship only undrafts the release after that workflow succeeds — so
+# waiting for `published` means the URLs baked into the PKGBUILD already
+# resolve when the package lands.
+#
+# The AUR creates a pkgbase on its first push, so this workflow needs no
+# manual bootstrap beyond owning the name.
+run-name: 📦 AUR ${{ inputs.tag || github.event.release.tag_name }}
+
+on:
+  release:
+    types: [published]
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to publish to the AUR
+        required: true
+        type: string
+
+# The push to the AUR authenticates with its own SSH key. This covers
+# `actions/checkout` and the `gh release download` calls, which only read.
+permissions:
+  contents: read
+
+jobs:
+  aur:
+    name: 📦 git-wipe-bin
+    runs-on: ubuntu-latest
+
+    # makepkg and namcap only exist on Arch, and a container is cheaper than
+    # bootstrapping pacman on the runner image.
+    container: archlinux:base-devel
+
+    # A dedicated environment: `AUR_SSH_PRIVATE_KEY` is scoped to it rather
+    # than sitting next to the GitHub App credentials in `release`, and the
+    # push is registered as its own deployment.
+    environment:
+      name: aur
+      url: https://aur.archlinux.org/packages/git-wipe-bin
+
+    env:
+      TAG: ${{ inputs.tag || github.event.release.tag_name }}
+
+    steps:
+      - name: Install dependencies
+        run: pacman -Syu --needed --noconfirm git openssh github-cli namcap
+
+      - uses: actions/checkout@v7
+        with:
+          # The push below uses AUR_SSH_PRIVATE_KEY, not the checkout
+          # credential, and a stored credential here would be offered to the
+          # AUR clone by accident.
+          persist-credentials: false
+
+      # makepkg refuses to run as root, and the container has no other user.
+      - name: Create the build user
+        run: |
+          set -euo pipefail
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+          # `actions/checkout` leaves the tree owned by root.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Render the PKGBUILD
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p build assets
+          cp packaging/aur/git-wipe-bin/PKGBUILD build/PKGBUILD
+
+          # This project tags without a `v` prefix, so the tag is the version.
+          sed -i "s/@VERSION@/${TAG}/" build/PKGBUILD
+
+          # Checksums are computed from the published assets themselves rather
+          # than read out of SHA256SUMS, so a disagreement between the two
+          # cannot reach the AUR.
+          checksum() {
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$1" --dir assets >&2
+            sha256sum "assets/$1" | cut -d' ' -f1
+          }
+          sed -i "s/@SHA256_X86_64@/$(checksum "git-wipe_${TAG}_linux-amd64.tar.gz")/" build/PKGBUILD
+          sed -i "s/@SHA256_AARCH64@/$(checksum "git-wipe_${TAG}_linux-arm64.tar.gz")/" build/PKGBUILD
+          # A leftover placeholder means an asset was renamed upstream and the
+          # package would pin nothing: an empty `sha256sums` entry does not
+          # fail a build, it accepts whatever it downloads. Fail here instead.
+          if grep -q '@[A-Z0-9_]*@' build/PKGBUILD; then
+            echo "::error::unsubstituted placeholder left in the PKGBUILD"
+            exit 1
+          fi
+
+          cat build/PKGBUILD
+
+      # Proves the PKGBUILD actually builds, and that the checksums verify,
+      # before it reaches users.
+      - name: Build the package
+        working-directory: build
+        run: |
+          set -euo pipefail
+          chown -R builder .
+          sudo -u builder makepkg --syncdeps --noconfirm --clean
+
+      # namcap exits 0 whatever it reports, errors included, so a bare call
+      # here would log a broken package and go green. Only `E:` fails the job.
+      - name: Check the package with namcap
+        working-directory: build
+        run: |
+          set -euo pipefail
+          namcap ./*.pkg.tar.zst | tee namcap.log
+          if grep -q ' E: ' namcap.log; then
+            echo "::error::namcap reported errors"
+            exit 1
+          fi
+
+      # Through the actual command name, not the package: this is the one
+      # failure — a rename inside the release asset — that would otherwise
+      # pass unnoticed.
+      - name: Verify the installed package
+        working-directory: build
+        run: |
+          set -euo pipefail
+          pacman -U --noconfirm ./*.pkg.tar.zst
+          git-wipe --version
+
+      - name: Generate .SRCINFO
+        working-directory: build
+        run: |
+          set -euo pipefail
+          chown -R builder .
+          # The redirect must happen as `builder` too, otherwise root owns the
+          # generated file (shellcheck SC2024).
+          sudo -u builder bash -c 'makepkg --printsrcinfo > .SRCINFO'
+
+      - name: Push to the AUR
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          # Absolute paths on purpose. The container sets HOME=/github/home, but
+          # OpenSSH expands `~` from the passwd database (/root for this step),
+          # not from $HOME — so anything written to `~/.ssh` here is invisible
+          # to ssh, which fails with "Host key verification failed".
+          ssh_dir="$(mktemp -d)"
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > "$ssh_dir/key"
+          chmod 600 "$ssh_dir/key"
+          ssh-keyscan -H aur.archlinux.org > "$ssh_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts"
+
+          git clone "ssh://aur@aur.archlinux.org/git-wipe-bin.git" aur
+          cp build/PKGBUILD build/.SRCINFO aur/
+
+          cd aur
+          git config user.name 'git-wipe release bot'
+          git config user.email 'noirbizarre@users.noreply.github.com'
+
+          # Compare the index, not the worktree: `git diff` alone ignores
+          # untracked files, so a re-run on an unchanged package would be
+          # indistinguishable from a pkgbase whose files are not tracked yet.
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "::notice::git-wipe-bin is already up to date on the AUR"
+            exit 0
+          fi
+
+          git commit -m "Update to ${TAG}"
+          git push origin master

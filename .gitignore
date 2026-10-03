@@ -1,0 +1,44 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Coverage and test-report output
+lcov.info
+junit.xml
+*.profraw
+
+# Pending insta snapshots — review with `mise run snapshots`, never commit.
+*.snap.new
+
+# Zensical documentation build output
+site/
+
+# Release-asset staging (publish-release.yaml) and, when `man_pages` is on,
+# `mise run man`'s collected output.
+/dist
+
+# Installed by the commitlint prek hook.
+node_modules/
+
+# The gh-ship release artifact, written by the prepare-release workflow.
+/ship.release.json
+
+# --- mise ---------------------------------------------------------------
+#
+# A common global gitignore (`~/.config/git/ignore`) excludes `mise.toml`,
+# `mise.*.toml` and `mise.lock`, on the assumption that mise configuration is a
+# personal thing. Here it is not: `mise.toml` defines the project's tasks and
+# `mise.lock` pins every tool to an exact build, which is what makes
+# `mise run ci` locally and the CI workflow run the same versions. Both are
+# re-included explicitly so the repository does not depend on how any one
+# developer has configured Git.
+#
+# A repository `.gitignore` takes precedence over `core.excludesFile`, so these
+# negations do the job.
+!mise.toml
+!mise.lock
+
+# Genuinely local, and genuinely per-developer: overrides and secrets that must
+# not be shared. Already covered by the global `mise.*.toml`, but stated here so
+# the intent survives a developer who has no global ignore at all.
+mise.local.toml

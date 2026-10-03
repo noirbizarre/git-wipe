@@ -1,0 +1,16 @@
+[files]
+extend-exclude = [
+  # Short SHAs in the changelog and the lockfiles read as typos.
+  "Cargo.lock",
+  "mise.lock",
+  "CHANGELOG.md",
+  # Snapshots record output verbatim, including any deliberate typo under test.
+  "tests/snapshots/**",
+  # Documentation build output.
+  "site/**",
+]
+
+[default.extend-words]
+# Deliberate misspellings that a test asserts on — typically the input to a
+# "did you mean ...?" diagnostic. Correcting one here deletes the test that
+# proves the suggestion works.
