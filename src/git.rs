@@ -196,6 +196,17 @@ fn is_unset_key(err: &anyhow::Error) -> bool {
         .is_some_and(|gerr| gerr.exit_code == Some(1))
 }
 
+/// Whether a `git config --unset` failure just means "there was nothing to
+/// unset".
+///
+/// `--unset` and `--unset-all` exit 5 when the key is absent. Anything else — a
+/// locked or unwritable config file, a broken repository — is a real failure
+/// that must not be reported as a successful unset.
+fn is_unset_noop(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<GitCommandError>()
+        .is_some_and(|gerr| gerr.exit_code == Some(5))
+}
+
 /// Render a path as a git command-line argument.
 ///
 /// git arguments must be UTF-8; a path that is not is a hard error rather than
@@ -1055,9 +1066,12 @@ impl Git {
     /// Uses `--local` to target the shared `.git/config`.
     /// See [`config_set`](Self::config_set) for rationale.
     pub fn config_unset_all(&self, key: &str) -> Result<()> {
-        // --unset-all exits non-zero if the key doesn't exist; that's fine.
-        let _ = self.run(&["config", "--local", "--unset-all", key]);
-        Ok(())
+        // --unset-all exits 5 if the key doesn't exist; that's fine.
+        match self.run(&["config", "--local", "--unset-all", key]) {
+            Ok(_) => Ok(()),
+            Err(e) if is_unset_noop(&e) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Remove a single value from a multi-valued config key, preserving the
@@ -1132,8 +1146,12 @@ impl Git {
         if enabled {
             self.run(&["config", "--local", &key, "true"])?;
         } else {
-            // --unset exits non-zero if the key doesn't exist; that's fine.
-            let _ = self.run(&["config", "--local", "--unset", &key]);
+            // --unset exits 5 if the key doesn't exist; that's fine.
+            match self.run(&["config", "--local", "--unset", &key]) {
+                Ok(_) => {}
+                Err(e) if is_unset_noop(&e) => {}
+                Err(e) => return Err(e),
+            }
         }
         Ok(())
     }
@@ -2410,6 +2428,30 @@ locked work in progress, do not remove
         // Verify from the main worktree
         let protected = git_main.config_get_all("wipe.protected")?;
         assert!(protected.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_unset_all_tolerates_a_missing_key() -> Result<()> {
+        let (_dir, git) = crate::test_helpers::init_repo()?;
+
+        git.config_unset_all("wipe.never-set")?;
+        git.set_branch_protected("never-flagged", false)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_unset_all_reports_a_locked_config_file() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        git.config_add("wipe.protected", "main")?;
+
+        // A stale lock file makes every config write fail.
+        std::fs::write(dir.path().join(".git/config.lock"), "")?;
+
+        assert!(git.config_unset_all("wipe.protected").is_err());
+        assert!(git.set_branch_protected("main", false).is_err());
 
         Ok(())
     }
