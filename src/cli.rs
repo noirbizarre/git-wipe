@@ -84,11 +84,12 @@ pub struct Cli {
     #[arg(long, value_name = "LEVEL", global = true, value_parser = clap::value_parser!(u8).range(1..=3))]
     pub effort: Option<u8>,
 
-    /// Skip worktrees created less than this long ago (default: 0s)
+    /// Skip worktrees changed less than this long ago (default: 0s)
     ///
     /// Accepts a single value and unit: 30s, 15m, 2h, 7d, 1w — or a bare 0 to
-    /// disable the guard. Protects a worktree you just created from the
-    /// default branch from being removed along with its "merged" branch.
+    /// disable the guard. Age is measured from the last real change in the
+    /// worktree. Protects a worktree you just created from the default branch
+    /// from being removed along with its "merged" branch.
     ///
     /// On `status` this is a filter instead of a guard: only entries at least
     /// this old are listed, and the configured `wipe.minage` is not inherited.

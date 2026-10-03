@@ -1150,7 +1150,7 @@ pub fn effective_remotes(git: &Git, config: &Config) -> Result<Vec<String>> {
 enum WorktreeGuard {
     /// `git worktree lock` was used on it.
     Locked,
-    /// It was created less than `--min-age` ago.
+    /// It last changed less than `--min-age` ago.
     TooYoung,
     /// It is smaller than `--min-size`.
     TooSmall,
@@ -1294,7 +1294,7 @@ fn resolve_stale_lock(
 fn format_too_young_skip_message(wt: &Worktree, min_age: MinAge) -> String {
     let branch_label = wt.branch.as_deref().unwrap_or("detached");
     format!(
-        "  Skipping recent worktree '{}' (branch: {branch_label}): created less than {min_age} ago.",
+        "  Skipping recent worktree '{}' (branch: {branch_label}): changed less than {min_age} ago.",
         wt.path.display()
     )
 }
