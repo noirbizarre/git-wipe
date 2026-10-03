@@ -803,7 +803,8 @@ mise run setup          # Install the binary locally
 ### Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/), enforced by
-commitlint via the prek `commit-msg` hook and re-checked by the CI lint job.
+commitlint via the prek `commit-msg` hook (a local check: the CI lint job runs
+the other hooks, not this one).
 The changelog and the next version number are derived from them, so the type
 and scope matter.
 
