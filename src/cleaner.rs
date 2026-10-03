@@ -6,7 +6,7 @@
 //! [`crate::worktrees`].
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -31,6 +31,16 @@ use crate::worktrees::{find_orphan_worktrees, is_too_young, worktree_size};
 fn fail(ui: &Ui, report: &mut Report, action: &str, target: &str, err: &anyhow::Error) {
     ui.report_failure(action, target, err);
     report.push_error(action, target, err);
+}
+
+/// [`fail`] for a failure on a filesystem path.
+///
+/// The user sees the `~`-shortened path; the JSON report keeps the absolute one
+/// (see [`tilde_path`]), so consumers can match it against the paths they
+/// already have.
+fn fail_path(ui: &Ui, report: &mut Report, action: &str, path: &Path, err: &anyhow::Error) {
+    ui.report_failure(action, &tilde_path(path), err);
+    report.push_error(action, &path_string(path), err);
 }
 
 /// Emit a warning to both the user and the JSON report.
@@ -816,7 +826,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                                     ItemStatus::Removed
                                 }
                                 Err(e) => {
-                                    fail(ui, &mut report, "remove", &tilde_path(&wt.path), &e);
+                                    fail_path(ui, &mut report, "remove", &wt.path, &e);
                                     ItemStatus::Failed
                                 }
                             };
@@ -866,7 +876,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                                 ItemStatus::Removed
                             }
                             Err(e) => {
-                                fail(ui, &mut report, "remove", &tilde_path(&wt.path), &e);
+                                fail_path(ui, &mut report, "remove", &wt.path, &e);
                                 ItemStatus::Failed
                             }
                         };
@@ -1267,7 +1277,7 @@ fn resolve_stale_lock(
             wt.path.display()
         ));
     } else if let Err(err) = git.worktree_unlock(&wt.path) {
-        fail(ui, report, "unlock", &path_string(&wt.path), &err);
+        fail_path(ui, report, "unlock", &wt.path, &err);
         return None; // couldn't unlock: stays guarded as locked
     } else {
         ui.muted(&format!(
