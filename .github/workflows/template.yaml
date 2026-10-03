@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v7
 
       # git-tpl comes from mise.toml, pinned and provenance-verified.
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
         with:
           cache: true
 
