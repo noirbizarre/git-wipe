@@ -100,8 +100,8 @@ pub struct Cli {
     /// Accepts a single value and unit: 512B, 100K, 100M, 2G — binary units —
     /// or a bare 0 to disable the filter/guard.
     ///
-    /// On a wipe run this excludes smaller worktrees from the candidate list
-    /// entirely. On `status` this is a display filter instead, and the
+    /// On a wipe run smaller worktrees are left in place, and so are their
+    /// branches (reported as `too_small`). On `status` this is a display filter instead, and the
     /// configured `wipe.minsize` is not inherited — same reasoning as
     /// `--min-age`.
     ///

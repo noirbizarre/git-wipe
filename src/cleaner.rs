@@ -899,13 +899,24 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             // leave behind a branch git-wipe considers merged. For such
             // branches we verify the ref is actually gone and delete it
             // ourselves if it survived. Branches whose worktree the user chose
-            // not to force-remove are skipped.
+            // not to force-remove, or that a guard (locked, too young, too
+            // small) left in place, are skipped.
             for branch in &candidates {
                 let key = format!("branch:{branch}");
                 if !selected.contains(&key) {
                     continue;
                 }
                 if skip_set.contains(branch) {
+                    continue;
+                }
+                // A guarded worktree (locked, too young, too small) was left
+                // in place and still has the branch checked out, so git would
+                // refuse to delete it. Leave the branch alone too; it stays
+                // `Skipped`, like the worktree already reported above.
+                if wt_map
+                    .get(branch)
+                    .is_some_and(|wt| worktree_guard(wt, &young, &small).is_some())
+                {
                     continue;
                 }
                 if opts.dry_run {
@@ -1722,7 +1733,7 @@ mod tests {
         let ui = Ui::new();
         let opts = opts_yes_skip_network();
 
-        run(&git, &config, &ui, &opts)?;
+        let report = run(&git, &config, &ui, &opts)?;
 
         // The locked worktree directory should still exist
         assert!(
@@ -1730,15 +1741,25 @@ mod tests {
             "locked worktree should not be removed"
         );
 
-        // The branch cannot be deleted because it's still checked out
-        // in the locked worktree — git refuses to delete it. This is
-        // expected: the worktree removal was skipped, so the branch
-        // deletion also fails gracefully (logged as a warning).
+        // The branch is still checked out in the locked worktree, so it is
+        // left alone along with the worktree rather than failing to delete.
         let branches = git.local_branches()?;
         assert!(
             branches.contains(&"feature/locked-wt".to_string()),
-            "branch should survive because its locked worktree prevents deletion"
+            "branch should survive because its locked worktree is kept"
         );
+        assert!(
+            report.errors.is_empty(),
+            "skipping the branch must not record a failed deletion, got {:?}",
+            report.errors
+        );
+        let entry = report
+            .local
+            .branches
+            .iter()
+            .find(|b| b.branch == "feature/locked-wt")
+            .expect("branch is still reported");
+        assert_eq!(entry.status, ItemStatus::Skipped);
         Ok(())
     }
 
