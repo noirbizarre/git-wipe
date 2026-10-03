@@ -62,10 +62,12 @@ pub struct Cli {
 
     /// With --yes, also delete branches whose upstream branch was deleted
     ///
-    /// These branches are always listed for interactive selection, but are
-    /// never pre-selected because a deleted upstream does not prove the branch
-    /// was merged. Requires up-to-date remote-tracking refs, so it has no
-    /// effect when --no-fetch is used outside of --dry-run.
+    /// These branches are always listed for interactive selection. A deleted
+    /// upstream does not prove the branch was merged, so they are only taken
+    /// non-interactively with this flag; interactively they are pre-selected
+    /// unless a forge is consulted and does not report them as merged.
+    /// Requires up-to-date remote-tracking refs, so it has no effect when
+    /// --no-fetch is used outside of --dry-run.
     #[arg(long)]
     pub delete_gone: bool,
 
