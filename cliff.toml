@@ -111,13 +111,13 @@ protect_breaking_commits = false
 filter_commits = false
 topo_order = false
 sort_commits = "newest"
-# This project tags with a `v` prefix (`v0.1.0`), unlike gh-ship. The tag and the
-# crate version therefore differ by that character, which prepare-release.yaml
-# strips when it computes the version.
+# No `v` prefix: the tag and the version are the same string. They still travel
+# as two fields in the release artifact, because the tag convention is a
+# project's own choice and gh-ship never derives one from the other.
 #
 # Anchored deliberately. A bare `[0-9]*` is a regex that also matches the empty
 # string, so it matches every tag in the repository, not just versions.
-tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+"
+tag_pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+"
 
 commit_preprocessors = [
   { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}](<REPO>/issues/${2}))" },
@@ -156,9 +156,7 @@ commit_parsers = [
 ]
 
 [bump]
-# The `v` prefix is this project's convention; git-cliff carries it through to
-# `--bumped-version`, so the prepare workflow strips it for the crate version.
-initial_tag = "v0.1.0"
+initial_tag = "0.1.0"
 features_always_bump_minor = true
 # Below 1.0, a breaking change bumps the minor version. SemVer allows it, and
 # `0.x` already tells users the surface is unstable. Flip this to `true` on the

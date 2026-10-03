@@ -20,8 +20,8 @@ provides=('git-synchronizer')
 conflicts=('git-synchronizer')
 replaces=('git-synchronizer')
 # The project tags with a `v` prefix while `pkgver` is the bare version, hence
-# the `v$pkgver` in the URL against `$pkgname-$pkgver.tar.gz` as the file name.
-source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
+# the `$pkgver` in the URL against `$pkgname-$pkgver.tar.gz` as the file name.
+source=("$pkgname-$pkgver.tar.gz::$url/releases/download/$pkgver/$pkgname-$pkgver.tar.gz")
 sha256sums=('@SHA256@')
 
 prepare() {

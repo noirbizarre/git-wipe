@@ -82,8 +82,8 @@ Both workflows are idempotent — they compare the staged index and exit early
 when nothing changed — so a failed leg can simply be replayed:
 
 ```sh
-gh workflow run aur.yaml -f tag=vX.Y.Z
-gh workflow run homebrew.yaml -f tag=vX.Y.Z
+gh workflow run aur.yaml -f tag=X.Y.Z
+gh workflow run homebrew.yaml -f tag=X.Y.Z
 ```
 
 ## Testing a change

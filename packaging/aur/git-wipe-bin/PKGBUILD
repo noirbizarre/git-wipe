@@ -22,8 +22,8 @@ options=('!strip' '!debug')
 # The upstream archives are named after the target only — the tag in the URL is
 # what pins the version — so they are renamed here to keep makepkg's source
 # cache unambiguous across releases.
-source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/v$pkgver/git-wipe-x86_64-unknown-linux-gnu.tar.gz")
-source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/v$pkgver/git-wipe-aarch64-unknown-linux-gnu.tar.gz")
+source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/$pkgver/git-wipe-x86_64-unknown-linux-gnu.tar.gz")
+source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/$pkgver/git-wipe-aarch64-unknown-linux-gnu.tar.gz")
 sha256sums_x86_64=('@SHA256_X86_64@')
 sha256sums_aarch64=('@SHA256_AARCH64@')
 

@@ -77,8 +77,8 @@ jobs:
             exit 0
           fi
 
-          # The tag carries a `v` prefix, `pkgver` does not.
-          version="${TAG#v}"
+          # This project tags without a `v` prefix, so the tag is the version.
+          version="${TAG}"
           sed -i "s/@VERSION@/${version}/" build/PKGBUILD
 
           # Checksums are computed from the published assets themselves rather

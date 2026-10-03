@@ -17,11 +17,11 @@ class GitWipe < Formula
   # no Rust toolchain.
   on_macos do
     on_arm do
-      url "https://github.com/noirbizarre/git-wipe/releases/download/v#{version}/git-wipe-aarch64-apple-darwin.tar.gz"
+      url "https://github.com/noirbizarre/git-wipe/releases/download/#{version}/git-wipe-aarch64-apple-darwin.tar.gz"
       sha256 "@SHA256_DARWIN_ARM64@"
     end
     on_intel do
-      url "https://github.com/noirbizarre/git-wipe/releases/download/v#{version}/git-wipe-x86_64-apple-darwin.tar.gz"
+      url "https://github.com/noirbizarre/git-wipe/releases/download/#{version}/git-wipe-x86_64-apple-darwin.tar.gz"
       sha256 "@SHA256_DARWIN_X86_64@"
     end
   end
@@ -30,11 +30,11 @@ class GitWipe < Formula
   # any distribution Homebrew supports regardless of its glibc.
   on_linux do
     on_arm do
-      url "https://github.com/noirbizarre/git-wipe/releases/download/v#{version}/git-wipe-aarch64-unknown-linux-musl.tar.gz"
+      url "https://github.com/noirbizarre/git-wipe/releases/download/#{version}/git-wipe-aarch64-unknown-linux-musl.tar.gz"
       sha256 "@SHA256_LINUX_ARM64@"
     end
     on_intel do
-      url "https://github.com/noirbizarre/git-wipe/releases/download/v#{version}/git-wipe-x86_64-unknown-linux-musl.tar.gz"
+      url "https://github.com/noirbizarre/git-wipe/releases/download/#{version}/git-wipe-x86_64-unknown-linux-musl.tar.gz"
       sha256 "@SHA256_LINUX_X86_64@"
     end
   end

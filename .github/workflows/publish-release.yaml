@@ -152,15 +152,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # The prefix and the file name carry the bare version, so a PKGBUILD can
-      # `cd "$pkgname-$pkgver"` with the pkgver it already declares. The tag
-      # itself keeps its `v`, which is why the two are not interchangeable.
+      # The prefix and the file name carry the version, so a PKGBUILD can
+      # `cd "$pkgname-$pkgver"` with the pkgver it already declares.
       - name: Build the source tarball
         env:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          version="${TAG#v}"
+          version="${TAG}"
           mkdir -p dist
           git archive --format=tar.gz \
             --prefix="git-wipe-${version}/" \

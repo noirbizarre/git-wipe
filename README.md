@@ -836,7 +836,7 @@ the lifecycle:
 1. push to `main` → `gh ship prepare` opens or updates the **Release PR** on
    the `release/next` branch, carrying the `Cargo.toml` bump and the changelog;
 2. review the changelog and merge that PR;
-3. `gh ship release` tags the merge commit as `vX.Y.Z`, drafts the release,
+3. `gh ship release` tags the merge commit as `X.Y.Z`, drafts the release,
    attaches the cross-compiled binaries, publishes the crate to crates.io, and
    only then makes the release public.
 

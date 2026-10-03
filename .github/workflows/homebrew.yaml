@@ -48,9 +48,8 @@ jobs:
           mkdir -p build assets
           cp packaging/homebrew/git-wipe.rb build/git-wipe.rb
 
-          # The tag carries a `v` prefix, the formula's `version` does not — it
-          # puts the `v` back when building the download URLs.
-          version="${TAG#v}"
+          # This project tags without a `v` prefix, so the tag is the version.
+          version="${TAG}"
           sed -i "s/@VERSION@/${version}/" build/git-wipe.rb
 
           # Checksums are computed from the published assets themselves rather
@@ -111,5 +110,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "git-wipe ${TAG#v}"
+          git commit -m "git-wipe ${TAG}"
           git push
