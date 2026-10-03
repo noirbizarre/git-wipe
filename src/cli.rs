@@ -177,8 +177,9 @@ pub struct Cli {
 
     /// Output a single JSON document to stdout (implies --yes)
     ///
-    /// Human-readable logs keep going to stderr. The document is pretty-printed
-    /// on a terminal and compact when piped or redirected.
+    /// Human-readable output is suppressed: stdout carries the document alone.
+    /// The document is pretty-printed on a terminal and compact when piped or
+    /// redirected.
     ///
     /// Global so it can be given before or after a subcommand
     /// (`git wipe config list --json`).
