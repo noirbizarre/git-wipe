@@ -770,11 +770,13 @@ flowchart TD
 
 ## Development
 
-This project uses [mise](https://mise.jdx.dev/) for task management. Start by
-installing the toolchain and the git hooks:
+This project uses [mise](https://mise.jdx.dev/) for task management. You need
+[rustup](https://rustup.rs/) and mise installed beforehand: mise deliberately
+does not manage Rust, which comes from rustup (see `rust-toolchain.toml`).
+Start by installing the tools and the git hooks:
 
 ```sh
-mise install            # Install the pinned toolchain and tools
+mise install            # Install the pinned tools (git-cliff, prek, nextest, …)
 prek install            # Install the pre-commit and commit-msg git hooks
 ```
 
