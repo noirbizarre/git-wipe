@@ -1,103 +1,147 @@
-min_version = "2026.1.1"
+# Toolchain and task definitions.
+#
+# Tool versions are resolved to exact builds in `mise.lock`, which is
+# committed. CI installs from these two files, so local runs and CI runs
+# use identical tool versions — CI drives the tools directly rather than
+# through the tasks defined below.
+#
+# Tools no CI job needs are declared on their own task rather than in `[tools]`,
+# because `mise install` — what CI runs — installs `[tools]` only. It matters:
+# cargo-binstall has no prebuilt artifact for some cargo tools, so a global
+# entry would make every CI job compile them from source.
+#
+# Rust itself is intentionally not managed here: CI needs per-job components
+# (rustfmt, clippy, llvm-tools-preview) and cross-compilation targets, which
+# `dtolnay/rust-toolchain` handles better. `rust-toolchain.toml` pins the
+# channel for both.
 
 [settings]
-# Resolve tools through mise.lock and keep it updated. Without this the
-# lockfile is ignored and `latest` really means latest — which would let
-# git-cliff change between releases and silently change our release notes.
+# Resolve tools through mise.lock and keep it updated. Without this, the
+# lockfile is ignored and `latest` really means latest.
 lockfile = true
 
 # Do not let mise adopt `rust-toolchain.toml`. Rust is installed by rustup
-# locally and by `dtolnay/rust-toolchain` in CI, which handle the per-job
-# components and the cross-compilation targets that mise does not. Without
-# this, `mise-action` would install a redundant second toolchain in every
-# workflow that uses it.
+# locally and by `dtolnay/rust-toolchain` in CI, which handle per-job
+# components and cross-compilation targets that mise does not. Leaving both
+# in charge would have mise shadow the toolchain CI just installed.
 idiomatic_version_file_enable_tools = []
 
 [tools]
+actionlint = "latest"
+# actionlint silently skips its shellcheck integration when the binary is
+# absent, so without this a local run is NOT the CI run. Runners ship it.
+#
+# The aqua backend is named explicitly: left as a bare `shellcheck` it resolves
+# to `asdf:shellcheck`, which carries no lockfile URLs, and `mise install
+# --locked` — what mise-action runs as soon as a mise.lock exists — fails on it.
+"aqua:koalaman/shellcheck" = "latest"
 prek = "latest"
+typos = "latest"
+git-cliff = "latest"
 cargo-binstall = "latest"
 "cargo:cargo-nextest" = "latest"
 "cargo:cargo-llvm-cov" = "latest"
-# The release toolchain. git-cliff derives both the next version and the
-# changelog; typos is invoked by cliff.toml as a commit preprocessor.
-git-cliff = "latest"
-typos = "latest"
-actionlint = "latest"
+# The template this project is rendered from. `cargo:` rather than `github:` or `ubi:`, which both
+# install it fine and write no lockfile URLs — and `mise install --locked`,
+# which mise-action runs as soon as a mise.lock exists, then fails on the entry
+# it cannot verify. The same trap as `shellcheck` above, from the other
+# direction: there the fix was naming a backend that locks, here it is naming
+# one that needs no URL to.
+#
+# It is not a source build. git-tpl ships binstall metadata, so with
+# cargo-binstall present this downloads a release archive — about three seconds
+# against several minutes to compile a crate that vendors libgit2.
+#
+# An explicit version, never `latest`: mise applies a `minimum_release_age`, so
+# `latest` resolves to whatever is old enough rather than to the newest release.
+"cargo:git-tpl" = "0.11.0"
+# cargo-insta is declared on the task that uses it instead of here — see the
+# note in the header.
+
+# --- Everyday ---------------------------------------------------------------
+#
+# `mise <task>` is shorthand for `mise tasks run <task>`, and a builtin
+# subcommand of the same name wins it silently — `mise fmt` formats mise.toml
+# rather than running cargo fmt, and says nothing about the task it shadowed.
+# `run` and `fmt` are both builtins, which is why these are `cli` and `format`.
+#
+# mise may claim further names in future releases, so `check:tasks` in the
+# template repository fails the render when it does.
+
+[tasks.default]
+description = "Run format, lint, build and test"
+depends = ["format", "lint", "lint:actions", "lint:md", "build", "test"]
 
 [tasks.build]
-description = "Build the project"
+description = "Build the binary"
 run = "cargo build"
 
-[tasks."build:release"]
-description = "Build in release mode"
-run = "cargo build --release"
-
 [tasks.test]
-description = "Run tests with nextest"
+description = "Run tests (accepts nextest selectors)"
+raw_args = true
 run = "cargo nextest run"
 
 [tasks.cover]
 description = "Run tests with coverage"
-run = "cargo llvm-cov nextest --lcov --output-path lcov.info"
+run = "cargo llvm-cov nextest"
 
-[tasks."cover:html"]
-description = "Generate HTML coverage report"
-run = "cargo llvm-cov nextest --html"
-
-[tasks.lint]
-description = "Run clippy"
-# Must stay identical to the clippy hook in prek.toml, which is what CI
-# enforces: linting only the default target/feature set here would let lints in
-# tests, benches or feature-gated code pass locally and fail in CI.
-run = "cargo clippy --all-targets --all-features -- -D warnings"
-
-[tasks.fmt]
-description = "Format code"
+[tasks.format]
+description = "Format the code"
 run = "cargo fmt --all"
 
-[tasks.fmt-check]
-description = "Check code formatting"
+[tasks."format:check"]
+description = "Check the formatting without rewriting"
 run = "cargo fmt --all -- --check"
 
-[tasks.check]
-description = "Run all checks"
-depends = ["fmt-check", "lint", "test"]
+[tasks.lint]
+description = "Lint the code"
+run = "cargo clippy --all-targets --all-features -- -D warnings"
+
+[tasks.spell]
+description = "Check spelling"
+run = "typos"
 
 [tasks."lint:actions"]
 description = "Lint the GitHub Actions workflows"
-# Rules and exclusions live in .github/actionlint.yml, so this task, the prek
-# hook and a bare `actionlint` all behave identically.
-run = "actionlint"
+# Suppressions live in .github/actionlint.yml rather than as flags here, so
+# this task and the prek hook cannot drift apart.
+run = "actionlint .github/workflows/*.yaml"
 
-[tasks.changelog]
-description = "Preview the changelog and version for the next release"
-run = """
-git cliff --bumped-version
-git cliff --bump --unreleased
-"""
+[tasks."lint:md"]
+description = "Lint the documentation Markdown"
+# Through `npx -p`, not mise's `npm:` backend: .markdownlint-cli2.yaml loads
+# the pretty output formatter alongside markdownlint-cli2 itself, and mise's
+# `npm:` backend installs each tool into its own isolated tree, where one
+# cannot resolve the other — `npx -p pkg1 -p pkg2` installs both into one
+# shared cache instead. Also not in [tools] for the usual reason: `mise
+# install`, what CI's other jobs run, would then pull an npm toolchain onto
+# every job in the matrix for a check only this task needs.
+#
+# Scoped to the same files as the prek hook, minus CHANGELOG.md, which is
+# git-cliff's output, not prose to wrap.
+run = 'npx -y -p markdownlint-cli2 -p markdownlint-cli2-formatter-pretty -- markdownlint-cli2 "AGENTS.md" "CONTRIBUTING.md" "README.md"'
 
-[tasks."ship:validate"]
-description = "Validate this repository's gh-ship release setup"
-run = "gh ship validate"
+[tasks.snapshots]
+description = "Review and update insta snapshots interactively"
+tools = { "cargo:cargo-insta" = "latest" }
+run = "cargo insta review"
 
-[tasks.man]
-description = "Collect the generated man pages and shell completions into dist/"
-# build.rs writes them into the build script's OUT_DIR, which cargo places in a
-# hash-suffixed directory. Rather than guessing the hash, ask cargo where the
-# build script ran via its JSON message stream.
-tools = { jq = "latest" }
-run = """
-set -euo pipefail
-out=$(cargo build --message-format=json 2>/dev/null \
-  | jq -r 'select(.reason == "build-script-executed") | select(.package_id | test("git-wipe")) | .out_dir' \
-  | tail -n 1)
-test -n "$out" || { echo "could not locate OUT_DIR" >&2; exit 1; }
-rm -rf dist/man dist/completions
-mkdir -p dist/man dist/completions
-cp "$out"/man/*.1 dist/man/
-cp "$out"/completions/* dist/completions/
-echo "dist/man ($(ls dist/man | wc -l) pages), dist/completions ($(ls dist/completions | wc -l) shells)"
-"""
+[tasks.check]
+description = "Run every check that does not modify the working tree"
+depends = ["format:check", "lint", "lint:actions", "lint:md", "spell", "test"]
+
+[tasks.ci]
+description = "Everything CI runs, locally"
+depends = ["check"]
+
+# --- git-wipe itself ---------------------------------------------------
+
+[tasks.cli]
+description = "Run git-wipe from source"
+# `raw_args` so flags reach the binary rather than mise: `mise cli --help`
+# prints the binary's help, not the task's.
+raw_args = true
+run = "cargo run --bin git-wipe --"
 
 [tasks.setup]
 description = "Install locally"
@@ -119,6 +163,101 @@ mkdir -p "$comp_dir"
 cp dist/completions/_git-wipe "$comp_dir/"
 echo "zsh completions -> $comp_dir (ensure it is on \\$fpath)"
 """
+
+[tasks.man]
+description = "Collect the generated man page and shell completions into dist/"
+# build.rs writes them into the build script's OUT_DIR, which cargo places in
+# a hash-suffixed directory. Rather than guessing the hash, ask cargo where
+# the build script ran via its JSON message stream.
+tools = { jq = "latest" }
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+out=$(cargo build --message-format=json 2>/dev/null \
+  | jq -r 'select(.reason == "build-script-executed") | select(.package_id | test("git-wipe")) | .out_dir' \
+  | tail -n 1)
+test -n "$out" || { echo "could not locate OUT_DIR" >&2; exit 1; }
+rm -rf dist/man dist/completions
+mkdir -p dist/man dist/completions
+cp "$out"/man/*.1 dist/man/
+cp "$out"/completions/* dist/completions/
+echo "dist/man ($(ls dist/man | wc -l) pages), dist/completions ($(ls dist/completions | wc -l) shells)"
+"""
+
+# --- Release ----------------------------------------------------------------
+
+[tasks.changelog]
+description = "Preview the changelog for the unreleased commits"
+run = "git cliff --unreleased"
+
+[tasks.release]
+description = "Show the version the next release would take"
+# The release itself is driven by gh-ship from .github/workflows/ship.yaml.
+# This task exists to answer 'what would ship next?' without opening CI.
+run = "git cliff --bumped-version"
+
+[tasks."ship:validate"]
+description = "Check the release setup against what gh-ship requires"
+run = "gh ship validate"
+
+# --- Template ---------------------------------------------------------------
+#
+# This project is rendered from rust.tpl. `git tpl update` advances
+# refs/tpl/<id> and touches nothing else — not HEAD, not the index, not the
+# worktree — so running it is always safe and never a decision. The changes
+# arrive only when you merge:
+#
+#   mise run tpl:check       # has it moved?
+#   mise run tpl:update      # bring the rendered ref up to date
+#   mise run tpl:diff        # read what merging it would change
+#   git tpl merge            # take it
+#
+# git-tpl is in [tools] above, so `mise install` is all these tasks need.
+# It used to be excluded because it vendored libgit2 and had no prebuilt
+# artifact, which would have made every CI job compile it; since 0.4.0 it ships
+# release archives and mise installs them directly.
+
+[tasks."tpl:update"]
+description = "Re-render the template into refs/tpl/<id> (leaves the worktree alone)"
+# `raw_args` so `--ref`, `--dirty` and `--answer` reach git-tpl.
+raw_args = true
+run = "git tpl update"
+
+[tasks."tpl:diff"]
+description = "Show what merging the template would change"
+# `raw_args` so `--stat`, `--name-only` and path limiting reach git-tpl.
+raw_args = true
+run = "git tpl diff"
+
+[tasks."tpl:check"]
+description = "Has the template moved? Exits 1 if merging it would change anything"
+# `update` first, because the rendered ref may not exist at all: a fresh clone
+# has no `refs/tpl/*` — `git clone` and `actions/checkout` fetch neither — and
+# `update` creates it rather than failing, so this works anywhere.
+#
+# `--exit-code` reports *difference*, never conflict. A preview that would
+# conflict is a correct answer to the question asked, and failing on it would
+# make this useless on exactly the projects that have diverged most.
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+git tpl update
+git tpl diff --exit-code --stat
+"""
+
+# --- project-specific tasks --------------------------------------------------
+#
+# Add your own tasks below this line. The template owns everything above it and
+# will keep updating it; everything here is yours, and Git's 3-way merge
+# preserves it across `git tpl update`.
+#
+# Open any multi-line `run` block with `#!/usr/bin/env bash`. Without one mise
+# runs it through `sh`, which is dash on a GitHub runner — `set -o pipefail`
+# errors there and `< <(...)` is a syntax error — while `/bin/sh` is often bash
+# locally. The difference does not show up until CI.
+#
+# Artwork tasks belong here rather than in `default` or `check`: they rewrite
+# committed binaries, so a routine run would dirty the working tree every time.
 
 # --- Artwork ----------------------------------------------------------------
 #

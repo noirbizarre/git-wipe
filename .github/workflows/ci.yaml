@@ -1,0 +1,185 @@
+name: ♻️ CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# GitHub defaults Windows steps to pwsh, which neither stops at the first
+# failing command nor reports anything but the last one's exit status — a
+# multi-command step there fails silently and the job goes green. bash is
+# present on all three runners and is invoked with `-e -o pipefail`.
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+
+  # sccache caches individual objects, so a Cargo.lock bump doesn't force a full rebuild the way rust-cache's key does.
+  RUSTC_WRAPPER: sccache
+  # Incremental compilation's on-disk state can't be reused by sccache, so the two are mutually exclusive.
+  CARGO_INCREMENTAL: "0"
+  # Backs sccache with GitHub's own Actions cache instead of a separate cloud bucket and its credentials.
+  SCCACHE_GHA_ENABLED: "true"
+  # lld-link ships with windows-latest (no install step) and links faster than link.exe; nextest links one binary
+  # per test target, so this matters. Scoped to this triple, so it's a no-op on Linux/macOS — which already
+  # defaults to Apple's own faster linker on Xcode 15+.
+  CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: 🕵️ Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The channel comes from the action ref, not rust-toolchain.toml,
+      # and each job installs the components it needs.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # mold links faster than GNU ld, and clippy still has to link every test/example target it type-checks.
+      - uses: rui314/setup-mold@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+
+      # Tool versions come from mise.toml + mise.lock, so CI runs exactly
+      # what `mise run default` runs locally. No pinned mise version: an
+      # incompatibility should surface here, not only on a contributor's
+      # machine running whatever they already have.
+      - uses: jdx/mise-action@v4
+        with:
+          cache: true
+
+      # The hooks, not the mise tasks: this is the same command a developer's
+      # `git commit` runs, so a green CI means the hooks are actually passing
+      # rather than a parallel set of checks that happens to agree.
+      - name: Run hooks
+        run: prek run --all-files --show-diff-on-failure
+
+  test:
+    name: 🧪 Tests (${{ matrix.os.name }})
+    runs-on: ${{ matrix.os.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - name: Linux
+            runner: ubuntu-latest
+            flag: linux
+          - name: Windows
+            runner: windows-latest
+            flag: windows
+          - name: macOS
+            runner: macos-latest
+            flag: macos
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+
+      # mold is Linux-only, so it only applies to this one leg of the matrix.
+      - name: Install mold (faster Linux linker)
+        if: matrix.os.flag == 'linux'
+        uses: rui314/setup-mold@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+
+      # nextest and llvm-cov are pinned by mise.lock rather than resolved
+      # per-run, so a tool release cannot change CI behaviour on its own.
+      - uses: jdx/mise-action@v4
+        with:
+          cache: true
+
+      - name: Disable Windows Defender real-time scanning
+        if: matrix.os.flag == 'windows'
+        shell: pwsh
+        # A Rust test suite spawns many short-lived processes and writes just as
+        # many small files into fresh temp directories. Defender's real-time
+        # protection inspects both, and that inspection is the standard,
+        # documented reason this workload is dramatically slower on
+        # `windows-latest` than on Linux/macOS — matching the "~4x slower" this
+        # project already lives with per `.github/codecov.yml`. The runner is
+        # destroyed at the end of the job, so there is nothing to re-enable.
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
+      - name: Run tests (with coverage)
+        run: |
+          cargo llvm-cov nextest --profile ci
+          cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          # Flagging each leg keeps the three reports distinguishable, so a
+          # partial upload is visible rather than looking like a coverage drop.
+          flags: ${{ matrix.os.flag }}
+
+      - name: Upload test results to Codecov
+        uses: codecov/codecov-action@v7
+        if: ${{ !cancelled() }}
+        with:
+          directory: target/nextest/ci
+          report_type: test_results
+
+  # gh-ship runs the release. Its configuration and the workflows it names must
+  # satisfy the contract it enforces, and finding out otherwise mid-release is
+  # the worst possible moment — so it is checked on every pull request instead.
+  ship:
+    name: 🚢 Ship setup
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install gh-ship
+        run: gh extension install noirbizarre/gh-ship
+
+      - name: Validate the release setup
+        run: gh ship validate
+
+  # `rust-version` in Cargo.toml is a promise. Without a job that keeps it, it
+  # drifts the first time anyone uses a newer language feature — and the
+  # breakage surfaces in a user's build, not here.
+  msrv:
+    name: 🧓 MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read the MSRV from Cargo.toml
+        id: msrv
+        run: |
+          version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+
+      # This job is Linux-only, so mold always applies (see the lint job).
+      - uses: rui314/setup-mold@v1
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+
+      # `check`, not `test`: dev-dependencies routinely require a newer
+      # toolchain than the crate itself, and the MSRV is a promise about
+      # consuming the library, not about developing it.
+      - name: Check
+        run: cargo check --all-targets

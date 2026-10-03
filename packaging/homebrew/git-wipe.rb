@@ -1,7 +1,7 @@
 # Homebrew formula template.
 #
 # `@VERSION@` and the `@SHA256_*@` placeholders are substituted by
-# .github/workflows/homebrew.yml from the published release assets, and the
+# .github/workflows/homebrew.yaml from the published release assets, and the
 # result is pushed to noirbizarre/homebrew-tap as Formula/git-wipe.rb.
 #
 # The formula is named after the binary (`git-wipe`), not the crate, because

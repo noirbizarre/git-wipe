@@ -1,0 +1,43 @@
+---
+# The one rule this enforces mechanically: no prose line over 120 columns —
+# `.editorconfig` surfaces the same number as a ruler. Tables and code blocks
+# are exempt because they can't be rewrapped without breaking their content;
+# standalone link lines are exempt by the rule itself (see MD013's docs)
+# because a URL can't be split either.
+config:
+  MD013:
+    line_length: 120
+    tables: false
+    code_blocks: false
+    heading_line_length: 120
+
+  # README.md's centered badge/hero block needs raw HTML — a mkdocs-material
+  # convention markdownlint has no other way to allow — so it opens with that
+  # block before its H1, not a heading.
+  MD033: false # no-inline-html
+  MD041: false # first-line-heading/first-line-h1
+
+  # CONTRIBUTING.md's task table uses the spaced ("loose") pipe style, not the
+  # compact style this rule wants; both are valid CommonMark tables.
+  MD060: false # table-column-style
+
+noBanner: true
+noProgress: true
+showFound: false
+
+# Readable terminal output over the plain default text — a wall of
+# unformatted `path:line:col` is what makes reviewing more than one or two
+# findings tedious enough to skip. Needs `markdownlint-cli2-formatter-pretty`
+# resolvable alongside markdownlint-cli2 itself: the prek hook gets it via
+# `additional_dependencies`, and `mise run lint:md` via `npx -p`, since mise's
+# `npm:` backend installs each tool in its own isolated tree and cannot
+# resolve one from within the other.
+outputFormatters:
+  - ["markdownlint-cli2-formatter-pretty"]
+
+# --- project-specific ---------------------------------------------------
+#
+# Add per-project rule exceptions below this line, one comment explaining
+# what real content triggers it — not a blanket `default: false`. The
+# template owns everything above; `git tpl update` never touches this file
+# below the marker.

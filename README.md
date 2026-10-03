@@ -5,7 +5,7 @@
 <p align="center"><strong>Wipe out merged local branches and worktrees</strong></p>
 
 <p align="center">
-  <a href="https://github.com/noirbizarre/git-wipe/actions/workflows/ci.yml" title="CI"><img src="https://github.com/noirbizarre/git-wipe/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/noirbizarre/git-wipe/actions/workflows/ci.yaml" title="CI"><img src="https://github.com/noirbizarre/git-wipe/actions/workflows/ci.yaml/badge.svg" alt="CI"></a>
   <a href="https://codecov.io/gh/noirbizarre/git-wipe" title="Codecov"><img src="https://codecov.io/gh/noirbizarre/git-wipe/graph/badge.svg" alt="Codecov"></a>
   <a href="https://crates.io/crates/git-wipe" title="crates.io"><img src="https://img.shields.io/crates/v/git-wipe" alt="crates.io"></a>
   <a href="https://github.com/noirbizarre/git-wipe/releases/latest" title="Release"><img src="https://img.shields.io/github/v/release/noirbizarre/git-wipe" alt="Release"></a>

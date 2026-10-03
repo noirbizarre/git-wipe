@@ -1,7 +1,7 @@
 # Maintainer: Axel Haustant <noirbizarre@gmail.com>
 #
 # Source package. `@VERSION@` and `@SHA256@` are substituted by
-# .github/workflows/aur.yml from the published release assets.
+# .github/workflows/aur.yaml from the published release assets.
 
 pkgname=git-wipe
 pkgver=@VERSION@

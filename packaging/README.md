@@ -7,10 +7,10 @@ resolve.
 
 | Path | Channel | Workflow |
 | --- | --- | --- |
-| `aur/git-wipe/` | AUR, built from the release source tarball | `.github/workflows/aur.yml` |
-| `aur/git-wipe-bin/` | AUR, prebuilt binary (x86_64, aarch64) | `.github/workflows/aur.yml` |
-| `aur/git-wipe-git/` | AUR, tracks `main` | `.github/workflows/aur.yml` |
-| `homebrew/git-wipe.rb` | `noirbizarre/homebrew-tap` | `.github/workflows/homebrew.yml` |
+| `aur/git-wipe/` | AUR, built from the release source tarball | `.github/workflows/aur.yaml` |
+| `aur/git-wipe-bin/` | AUR, prebuilt binary (x86_64, aarch64) | `.github/workflows/aur.yaml` |
+| `aur/git-wipe-git/` | AUR, tracks `main` | `.github/workflows/aur.yaml` |
+| `homebrew/git-wipe.rb` | `noirbizarre/homebrew-tap` | `.github/workflows/homebrew.yaml` |
 
 ## The placeholder contract
 
@@ -33,11 +33,11 @@ from the checkout, and its source is a git URL, so there is nothing to pin.
 
 Nothing else in these templates may hardcode a version: adding an asset means
 adding both a placeholder and the substitution that fills it, and
-`homebrew.yml` fails if any placeholder survives rendering.
+`homebrew.yaml` fails if any placeholder survives rendering.
 
 ## Renaming or removing a release asset
 
-The templates address assets by name, so `publish-release.yml` and these files
+The templates address assets by name, so `publish-release.yaml` and these files
 change together:
 
 - `git-wipe-<target>.tar.gz` comes from `taiki-e/upload-rust-binary-action`
@@ -82,13 +82,13 @@ Both workflows are idempotent — they compare the staged index and exit early
 when nothing changed — so a failed leg can simply be replayed:
 
 ```sh
-gh workflow run aur.yml -f tag=vX.Y.Z
-gh workflow run homebrew.yml -f tag=vX.Y.Z
+gh workflow run aur.yaml -f tag=vX.Y.Z
+gh workflow run homebrew.yaml -f tag=vX.Y.Z
 ```
 
 ## Testing a change
 
-`aur.yml` builds every non-VCS package before pushing it, so a broken PKGBUILD
+`aur.yaml` builds every non-VCS package before pushing it, so a broken PKGBUILD
 fails the workflow rather than reaching users. To check one locally, substitute
 the placeholders against an already published release and run:
 

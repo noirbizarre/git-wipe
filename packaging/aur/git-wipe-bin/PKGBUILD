@@ -1,7 +1,7 @@
 # Maintainer: Axel Haustant <noirbizarre@gmail.com>
 #
 # Prebuilt binary package. `@VERSION@`, `@SHA256_X86_64@` and `@SHA256_AARCH64@`
-# are substituted by .github/workflows/aur.yml from the published release
+# are substituted by .github/workflows/aur.yaml from the published release
 # assets.
 
 pkgname=git-wipe-bin

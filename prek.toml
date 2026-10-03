@@ -4,11 +4,18 @@ default_install_hook_types = ["pre-commit", "commit-msg"]
 repo = "builtin"
 hooks = [
   { id = "check-added-large-files" },
+  { id = "check-merge-conflict" },
   { id = "check-toml" },
   { id = "check-yaml" },
+  { id = "check-json" },
+  # Rust files are excluded because `cargo fmt` below already owns their final
+  # newline, and two hooks rewriting the same bytes is how a pre-commit run
+  # ends up needing a second pre-commit run.
   { id = "end-of-file-fixer", exclude_types = ["rust"] },
   { id = "mixed-line-ending" },
-  { id = "trailing-whitespace" },
+  # Snapshots and fixtures record output verbatim, trailing whitespace
+  # included. Trimming it here would fail the tests that assert it.
+  { id = "trailing-whitespace", exclude = "^tests/(snapshots/.*\\.snap|fixtures/.*)$" },
 ]
 
 [[repos]]
@@ -20,9 +27,49 @@ id = "commitlint"
 stages = ["commit-msg"]
 additional_dependencies = ["@commitlint/config-conventional"]
 
+# actionlint publishes its own hook manifest, so this uses that instead of
+# hand-rolling a `repo = "local"` block: version bumps are then visible to
+# `prek update` the same way the commitlint hook above already is, and
+# `name`/`entry`/`files` come from the manifest — nothing to override. mise
+# is a requirement to work on this project at all, so its shims already put
+# the pinned `actionlint` on PATH; the `actionlint-system` hook's bare
+# `entry = "actionlint"` finds it without help.
+#
+# Keep `rev` in step with `tools.actionlint` in mise.lock: nothing enforces
+# the two agree.
+#
+# Suppressions are configured in .github/actionlint.yml, not here: the same
+# file serves `mise run lint:actions`, so the two cannot disagree.
+[[repos]]
+repo = "https://github.com/rhysd/actionlint"
+rev = "v1.7.12"
+hooks = [{ id = "actionlint-system" }]
+
+# Mechanically enforces the one Markdown convention AGENTS.md's Style section
+# otherwise only states: no prose line over 120 columns. Scoped to the
+# project-authored docs, not CHANGELOG.md — that one is git-cliff's output,
+# not prose to wrap.
+[[repos]]
+repo = "https://github.com/DavidAnson/markdownlint-cli2"
+rev = "v0.23.2"
+
+[[repos.hooks]]
+id = "markdownlint-cli2"
+files = "^(AGENTS\\.md|CONTRIBUTING\\.md|README\\.md)$"
+# For the pretty output formatter .markdownlint-cli2.yaml configures — it
+# needs to resolve alongside markdownlint-cli2 itself, and this installs it
+# into the same node environment as the hook.
+additional_dependencies = ["markdownlint-cli2-formatter-pretty"]
 
 [[repos]]
 repo = "local"
+
+[[repos.hooks]]
+id = "typos"
+name = "typos"
+language = "system"
+entry = "typos"
+pass_filenames = false
 
 [[repos.hooks]]
 id = "fmt"
@@ -36,25 +83,23 @@ pass_filenames = false
 id = "clippy"
 name = "cargo clippy"
 language = "system"
-# Must stay identical to [tasks.lint] in mise.toml. Kept as a direct cargo
-# invocation rather than `mise run lint` because cargo is on PATH via rustup,
-# unlike the mise-managed tools below.
 entry = "cargo clippy --all-targets --all-features -- -D warnings"
 files = "\\.rs$"
 pass_filenames = false
 
-# The release runs entirely on workflows, so a typo in one is only discovered
-# when a release is already under way. Configuration, including which checks
-# are silenced and why, lives in .github/actionlint.yml.
+# --- project-specific hooks --------------------------------------------------
 #
-# `system`, like the hooks above, but routed through mise: unlike cargo, which
-# rustup puts on PATH, actionlint exists only as a mise-managed tool. Going via
-# `mise exec` runs the version mise.lock pins whether or not the caller's shell
-# has mise activated — a git hook usually does not.
-[[repos.hooks]]
-id = "actionlint"
-name = "actionlint"
-language = "system"
-entry = "mise exec -- actionlint"
-files = "^\\.github/(workflows/.*\\.ya?ml|actionlint\\.ya?ml)$"
-pass_filenames = false
+# Add architecture guards and other project-only hooks below this line. The
+# template owns everything above it and will keep updating it; everything here
+# is yours, and Git's 3-way merge preserves it across `git tpl update`.
+#
+# The pattern these projects use is a grep that fails the commit when a
+# dependency escapes the module that is supposed to contain it:
+#
+#   [[repos.hooks]]
+#   id = "http-isolation"
+#   name = "the HTTP client is confined to the data layer"
+#   language = "system"
+#   entry = "bash -c '! grep -rnP --include=*.rs \"(?<![A-Za-z0-9_])ureq::\" src | grep -v \"^src/data/\"'"
+#   files = "\\.rs$"
+#   pass_filenames = false
