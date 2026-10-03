@@ -426,7 +426,17 @@ impl Git {
     /// cannot express are dropped here (they are still filtered out later by
     /// the globset matcher). Passing explicit refspecs also bypasses any custom
     /// `remote.<name>.fetch` configuration, so the default mapping is restated.
-    pub fn fetch_remote_prune(&self, remote: &str, exclude: &[String]) -> Result<()> {
+    ///
+    /// A negative refspec also takes the excluded refs out of `--prune`'s
+    /// scope, so a tracking ref for an ignored branch that was deleted on the
+    /// remote would linger forever. When negatives are used, a follow-up
+    /// `git remote prune <remote>` (a ref listing only, no object transfer)
+    /// removes those stale refs, giving the same result as `git fetch --prune`.
+    ///
+    /// Returns `Err` when the fetch itself fails. When only that follow-up
+    /// prune fails, the fetch is still good: `Ok(Some(message))` carries a
+    /// warning for the caller to surface.
+    pub fn fetch_remote_prune(&self, remote: &str, exclude: &[String]) -> Result<Option<String>> {
         let negatives: Vec<String> = exclude
             .iter()
             .filter(|p| refspec_safe(p))
@@ -435,14 +445,17 @@ impl Git {
 
         if negatives.is_empty() {
             self.run(&["fetch", "--prune", remote])?;
-            return Ok(());
+            return Ok(None);
         }
 
         let positive = format!("+refs/heads/*:refs/remotes/{remote}/*");
         let mut args: Vec<&str> = vec!["fetch", "--prune", remote, &positive];
         args.extend(negatives.iter().map(String::as_str));
         self.run(&args)?;
-        Ok(())
+
+        Ok(self.run(&["remote", "prune", remote]).err().map(|e| {
+            format!("Could not prune stale tracking refs of ignored branches on {remote}: {e}")
+        }))
     }
 
     // ── Pull / fast-forward ─────────────────────────────────────────
@@ -2854,6 +2867,54 @@ locked work in progress, do not remove
         assert!(
             !refs.contains("refs/remotes/origin/wip/spike"),
             "ignored branch should never be fetched, got {refs}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_remote_prune_removes_deleted_ignored_branches() -> Result<()> {
+        let (_dir, work_path, bare_path) = init_repo_with_local_remote()?;
+
+        // Publish `wip/spike` from a second clone, then fetch it plainly so the
+        // work repo holds a tracking ref for it.
+        let other = _dir.path().join("other");
+        Command::new("git")
+            .args([
+                "clone",
+                bare_path.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ])
+            .output()?;
+        Command::new("git")
+            .args(["checkout", "-b", "wip/spike", "main"])
+            .current_dir(&other)
+            .output()?;
+        Command::new("git")
+            .args(["push", "origin", "wip/spike"])
+            .current_dir(&other)
+            .output()?;
+
+        let git = Git::with_workdir(false, &work_path);
+        git.run(&["fetch", "origin"])?;
+        let refs = git.run(&["for-each-ref", "--format=%(refname)", "refs/remotes"])?;
+        assert!(
+            refs.contains("refs/remotes/origin/wip/spike"),
+            "precondition: tracking ref should exist, got {refs}"
+        );
+
+        // The branch disappears from the remote, then becomes ignored.
+        Command::new("git")
+            .args(["push", "origin", "--delete", "wip/spike"])
+            .current_dir(&other)
+            .output()?;
+
+        let warning = git.fetch_remote_prune("origin", &["wip/*".to_string()])?;
+        assert_eq!(warning, None, "a successful prune carries no warning");
+
+        let refs = git.run(&["for-each-ref", "--format=%(refname)", "refs/remotes"])?;
+        assert!(
+            !refs.contains("refs/remotes/origin/wip/spike"),
+            "stale tracking ref of an ignored branch should be pruned, got {refs}"
         );
         Ok(())
     }

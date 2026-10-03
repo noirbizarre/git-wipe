@@ -435,6 +435,12 @@ refspec (a single `*` and no other metacharacters), the fetch uses an explicit
 refspec and therefore bypasses a custom `remote.<name>.fetch` setting. With only
 richer patterns, the default fetch — and your custom refspec — is left intact.
 
+Pruning behaves like `git fetch --prune` either way: a negative refspec would
+otherwise shield an ignored branch from pruning, so in that case a follow-up
+`git remote prune <remote>` (a ref listing, no object transfer) removes the
+`<remote>/<branch>` tracking ref of any ignored branch deleted upstream. If
+only that follow-up fails, the fetch still counts and a warning is reported.
+
 ### First run
 
 On first run (when no `[wipe]` config section exists), an interactive
