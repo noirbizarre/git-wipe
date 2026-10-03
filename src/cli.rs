@@ -49,7 +49,7 @@ pub struct Cli {
     pub no_pull: bool,
 
     /// Only clean local branches (skip remote deletion)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "remote_only")]
     pub local_only: bool,
 
     /// Only clean remote branches (skip local deletion)
@@ -446,6 +446,13 @@ mod tests {
     fn cli_min_size_rejects_garbage() {
         assert!(Cli::try_parse_from(["git-wipe", "--min-size", "soon"]).is_err());
         assert!(Cli::try_parse_from(["git-wipe", "--min-size", "5x"]).is_err());
+    }
+
+    #[test]
+    fn cli_local_only_and_remote_only_conflict() {
+        assert!(Cli::try_parse_from(["git-wipe", "--local-only"]).is_ok());
+        assert!(Cli::try_parse_from(["git-wipe", "--remote-only"]).is_ok());
+        assert!(Cli::try_parse_from(["git-wipe", "--local-only", "--remote-only"]).is_err());
     }
 
     #[test]
