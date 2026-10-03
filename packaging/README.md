@@ -19,10 +19,10 @@ The templates are not valid as they stand: the workflows substitute
 
 | Placeholder | Filled from |
 | --- | --- |
-| `@VERSION@` | the tag with its `v` stripped |
+| `@VERSION@` | the tag, which is the version (no `v` prefix) |
 | `@SHA256@` | `git-wipe-<version>.tar.gz` |
-| `@SHA256_X86_64@`, `@SHA256_AARCH64@` | `git-wipe-<arch>-unknown-linux-gnu.tar.gz` |
-| `@SHA256_DARWIN_*@`, `@SHA256_LINUX_*@` | `git-wipe-<target>.tar.gz` (macOS, Linux musl) |
+| `@SHA256_X86_64@`, `@SHA256_AARCH64@` | `git-wipe_<version>_linux-<amd64\|arm64>.tar.gz` |
+| `@SHA256_DARWIN_*@`, `@SHA256_LINUX_*@` | `git-wipe_<version>_<platform>.tar.gz` (macOS, Linux musl) |
 
 Checksums are always computed from the downloaded asset itself, never read from
 the `.sha256` files published beside it: a mismatch between the two must not be
@@ -40,10 +40,12 @@ adding both a placeholder and the substitution that fills it, and
 The templates address assets by name, so `publish-release.yaml` and these files
 change together:
 
-- `git-wipe-<target>.tar.gz` comes from `taiki-e/upload-rust-binary-action`
-  (`archive: $bin-$target` by default) and carries **no leading directory** —
-  `git-wipe`, `man/`, `completions/`, `LICENSE` and `README.md` sit at its root.
-  `git-wipe-bin` and the formula both rely on that layout.
+- `git-wipe_<version>_<platform>.tar.gz` comes from the template's "Package the
+  Unix binaries" step (the `archive` answer) and has a single leading
+  `git-wipe-<version>-<platform>/` directory laid out as a prefix: `bin/`,
+  `share/doc/git-wipe/`, `share/man/man1/` and the completions. The formula
+  and `git-wipe-bin` rely on that layout. The raw binaries are published beside
+  it for `cargo binstall`.
 - `git-wipe-<version>.tar.gz` is produced by the `source` job, with a
   `git-wipe-<version>/` prefix so a PKGBUILD can `cd "$pkgname-$pkgver"`.
 

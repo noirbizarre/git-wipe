@@ -99,8 +99,8 @@ jobs:
             git-wipe-bin)
               # Both architectures, even though this runner only builds one:
               # .SRCINFO must carry a checksum for every declared `arch`.
-              x86_64=$(download "git-wipe-x86_64-unknown-linux-gnu.tar.gz")
-              aarch64=$(download "git-wipe-aarch64-unknown-linux-gnu.tar.gz")
+              x86_64=$(download "git-wipe_${TAG}_linux-amd64.tar.gz")
+              aarch64=$(download "git-wipe_${TAG}_linux-arm64.tar.gz")
               sed -i -e "s/@SHA256_X86_64@/${x86_64}/" \
                      -e "s/@SHA256_AARCH64@/${aarch64}/" build/PKGBUILD
               ;;

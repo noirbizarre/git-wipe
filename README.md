@@ -94,11 +94,12 @@ completions in one go:
 mise run setup
 ```
 
-Prebuilt release archives ship them under `man/` and `completions/`. Install by
-hand with:
+Prebuilt release archives (`git-wipe_<version>_<platform>.tar.gz`) ship them under
+`share/man/man1/` and `share/*-completion*`, laid out as a prefix. Install by hand
+with:
 
 ```sh
-cp man/*.1 ~/.local/share/man/man1/
+cp share/man/man1/*.1 ~/.local/share/man/man1/
 ```
 
 Make sure that directory is on your `MANPATH` (most distributions add

@@ -23,6 +23,49 @@ keywords = ["git", "branches", "worktree", "cleanup", "merged"]
 categories = ["command-line-utilities", "development-tools"]
 build = "build.rs"
 
+# cargo-binstall otherwise derives an asset name from the target triple, and
+# the publish workflow's assets carry short platform suffixes instead (the
+# `asset` field of each entry in `data/targets.toml`). A wrong guess is not an
+# error: binstall silently falls back to compiling from source, which is the
+# slow path this exists to avoid. So every target the publish workflow builds
+# is mapped by hand, from that same catalogue — one override per selected
+# target, so this list never drifts from the publish matrix.
+#
+# `pkg-fmt = "bin"`: the publish workflow uploads the raw executable, not an
+# archive — see publish-release.yaml's "Stage the asset" step.
+[package.metadata.binstall]
+pkg-fmt = "bin"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_linux-amd64"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_linux-arm64"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_linux-amd64-musl"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_linux-arm64-musl"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_darwin-amd64"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_darwin-arm64"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_windows-amd64.exe"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_windows-arm64.exe"
+
+[package.metadata.binstall.overrides.x86_64-unknown-freebsd]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_freebsd-amd64"
+
+
+
+
 [[bin]]
 name = "git-wipe"
 path = "src/main.rs"

@@ -1,9 +1,10 @@
 name: 🍺 Homebrew
 
-# Updates the `git-wipe` formula in noirbizarre/homebrew-tap once a release is
-# public. Same trigger as 📦 AUR and for the same reason: gh-ship only undrafts
-# the release after 📦 Publish Release succeeds, so waiting for `published`
-# means the URLs baked into the formula already resolve when it lands.
+# Updates the formula in the tap once a release is public. The trigger is
+# `release: published` rather than the completion of 📦 Publish Release,
+# because gh-ship only undrafts the release after that workflow succeeds — so
+# waiting for `published` means the URLs baked into the formula already
+# resolve when it lands in the tap.
 run-name: 🍺 Homebrew ${{ inputs.tag || github.event.release.tag_name }}
 
 on:
@@ -17,6 +18,8 @@ on:
         required: true
         type: string
 
+# The push to the tap authenticates with its own token. This covers
+# `actions/checkout` and the `gh release download` calls, which only read.
 permissions:
   contents: read
 
@@ -38,6 +41,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          # The push below uses TAP_TOKEN, not the checkout credential, and a
+          # stored credential here would be offered to the tap clone by accident.
           persist-credentials: false
 
       - name: Render the formula
@@ -49,22 +54,21 @@ jobs:
           cp packaging/homebrew/git-wipe.rb build/git-wipe.rb
 
           # This project tags without a `v` prefix, so the tag is the version.
-          version="${TAG}"
-          sed -i "s/@VERSION@/${version}/" build/git-wipe.rb
+          sed -i "s/@VERSION@/${TAG}/" build/git-wipe.rb
 
           # Checksums are computed from the published assets themselves rather
-          # than from the `.sha256` files shipped next to them, so a mismatch
-          # between the two cannot reach the tap.
+          # than read out of SHA256SUMS, so a disagreement between the two
+          # cannot reach the tap.
           checksum() {
             gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$1" --dir assets >&2
             sha256sum "assets/$1" | cut -d' ' -f1
           }
 
           declare -A targets=(
-            [DARWIN_ARM64]=git-wipe-aarch64-apple-darwin.tar.gz
-            [DARWIN_X86_64]=git-wipe-x86_64-apple-darwin.tar.gz
-            [LINUX_ARM64]=git-wipe-aarch64-unknown-linux-musl.tar.gz
-            [LINUX_X86_64]=git-wipe-x86_64-unknown-linux-musl.tar.gz
+            [DARWIN_ARM64]="git-wipe_${TAG}_darwin-arm64.tar.gz"
+            [DARWIN_AMD64]="git-wipe_${TAG}_darwin-amd64.tar.gz"
+            [LINUX_AMD64_MUSL]="git-wipe_${TAG}_linux-amd64-musl.tar.gz"
+            [LINUX_ARM64_MUSL]="git-wipe_${TAG}_linux-arm64-musl.tar.gz"
           )
           for placeholder in "${!targets[@]}"; do
             sha256=$(checksum "${targets[$placeholder]}")
@@ -82,7 +86,7 @@ jobs:
 
       - name: Push to the tap
         env:
-          # A token with `contents: write` on noirbizarre/homebrew-tap only.
+          # A token with `contents: write` on the tap repository only.
           GH_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
           set -euo pipefail
@@ -92,15 +96,15 @@ jobs:
           mkdir -p Formula Aliases
           cp ../build/git-wipe.rb Formula/git-wipe.rb
 
-          # The formula was `git-sync` before the rename. An alias keeps
-          # `brew upgrade` and `brew install noirbizarre/tap/git-sync` working
-          # for anyone who installed under the old name, instead of leaving
-          # them on a formula the tap no longer carries.
+          # Not in rust.tpl. The formula was `git-sync` before the rename. An
+          # alias keeps `brew upgrade` and `brew install noirbizarre/tap/git-sync`
+          # working for anyone who installed under the old name, instead of
+          # leaving them on a formula the tap no longer carries.
           rm -f Formula/git-sync.rb
           ln -sf ../Formula/git-wipe.rb Aliases/git-sync
 
           git config user.name 'git-wipe release bot'
-          git config user.email 'noirbizarre@gmail.com'
+          git config user.email 'noirbizarre@users.noreply.github.com'
 
           # Compare the index, not the worktree: `git diff` alone ignores
           # untracked files, so the very first import would look like a no-op.

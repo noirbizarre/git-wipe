@@ -7,6 +7,7 @@
 source = "git@github.com:noirbizarre/rust.tpl.git"
 
 [answers]
+archive = true
 aur = true
 author = "Axel H. <noirbizarre@gmail.com>"
 bin_name = "git-wipe"
@@ -25,6 +26,7 @@ msrv = true
 msrv_version = "1.88"
 owner = "noirbizarre"
 publish = true
+service = false
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
