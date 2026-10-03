@@ -721,9 +721,9 @@ impl Git {
     /// `true` after the target has advanced with unrelated commits that
     /// touch different files.
     ///
-    /// Returns `Ok(false)` when the merge would conflict (non-zero exit) or
-    /// when the resulting tree differs from `target`'s tree. Requires
-    /// `git >= 2.38` for the `--write-tree` option.
+    /// Returns `Ok(false)` when the merge would conflict (exit 1) or when the
+    /// resulting tree differs from `target`'s tree. Any other failure is an
+    /// error. Requires `git >= 2.38` for the `--write-tree` option.
     pub fn merge_adds_nothing(&self, target: &str, branch: &str) -> Result<bool> {
         let args = ["merge-tree", "--write-tree", target, branch];
         let output = self.spawn(&args)?;
@@ -738,11 +738,15 @@ impl Git {
                 let target_tree = self.run(&["rev-parse", &format!("{target}^{{tree}}")])?;
                 Ok(merged_tree == target_tree.trim())
             }
-            // Non-zero exit: typically conflicts (exit 1). Treat as "merge
-            // would add something" rather than an error, so callers can keep
-            // probing other strategies.
-            Some(_) => Ok(false),
-            None => Err(anyhow::Error::new(command_error("git", &args, &output))),
+            // Exit 1: the merge conflicts. Treat as "merge would add
+            // something" rather than an error, so callers can keep probing
+            // other strategies.
+            Some(1) => Ok(false),
+            // Anything else (129 on git < 2.38 which lacks `--write-tree`,
+            // 128 for a fatal error, a signal) is a real failure, propagated so
+            // the caller can surface it instead of silently reading "not
+            // merged".
+            _ => Err(anyhow::Error::new(command_error("git", &args, &output))),
         }
     }
 
