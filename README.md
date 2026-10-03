@@ -87,7 +87,8 @@ That only works once the man page is installed — otherwise git reports
 pages and the shell completions for you; `cargo install` places the binary
 alone, so with it they have to be installed separately.
 
-From a checkout, `mise` does both, plus zsh completions:
+From a checkout, `mise` installs the binary, the man pages and the zsh
+completions in one go:
 
 ```sh
 mise run setup
@@ -797,9 +798,9 @@ mise run check          # Run all checks (fmt-check + lint + test)
 mise run cover          # Generate lcov coverage report
 mise run cover:html     # Generate HTML coverage report
 mise run changelog      # Preview the next version and changelog
-mise run ship:validate  # Validate the gh-ship release setup
+mise run ship:validate  # Validate the gh-ship release setup (needs gh + the gh-ship extension)
 mise run man            # Collect the generated man pages and completions
-mise run setup          # Install the binary locally
+mise run setup          # Install the binary, man pages and zsh completions locally
 ```
 
 ### Commits
