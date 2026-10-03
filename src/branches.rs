@@ -176,6 +176,10 @@ pub struct Merged {
     /// The subset of `candidates` settled by the forge, whose pull/merge
     /// request is recorded as merged. Empty unless the forge is enabled.
     pub pr_merged: HashSet<String>,
+    /// Whether the forge gave a usable answer for this scan. When it did, only
+    /// `pr_merged` branches are trusted as merged by default; otherwise (no
+    /// forge, outage, unsupported remote) git alone judged.
+    pub forge_answered: bool,
     /// One message per distinct merge-detection failure.
     pub warnings: Vec<String>,
 }
@@ -221,6 +225,7 @@ fn forge_pass(
         match forge.pr_merged(remote, tips) {
             ForgeOutcome::Resolved(branches) => {
                 answered = true;
+                found.forge_answered = true;
                 resolved.extend(branches);
             }
             ForgeOutcome::Unsupported(reason) => unsupported.push(reason),
@@ -2106,12 +2111,19 @@ mod tests {
         let found = find_merged_local(&git, &filter, Effort::Quick, TEST_JOBS, Some(&forge))?;
         assert_eq!(found.candidates, vec!["feature/done".to_string()]);
         assert!(found.pr_merged.contains("feature/done"));
+        assert!(found.forge_answered);
 
         // The forge does not know it: git still finds it, as plain `merged`.
+        // It did answer though, so git's findings are not pre-selected.
         let silent = FakeForge::merged(&[]);
         let found = find_merged_local(&git, &filter, Effort::Quick, TEST_JOBS, Some(&silent))?;
         assert_eq!(found.candidates, vec!["feature/done".to_string()]);
         assert!(found.pr_merged.is_empty());
+        assert!(found.forge_answered);
+
+        // Without a forge nobody answered.
+        let found = find_merged_local(&git, &filter, Effort::Quick, TEST_JOBS, None)?;
+        assert!(!found.forge_answered);
         Ok(())
     }
 
@@ -2166,6 +2178,7 @@ mod tests {
                 find_merged_local(&git, &filter, Effort::Thorough, TEST_JOBS, Some(&forge))?;
             assert_eq!(found.candidates, offline.candidates);
             assert!(found.pr_merged.is_empty());
+            assert!(!found.forge_answered, "an outage is not a verdict");
             assert_eq!(found.warnings.len(), 1, "{:?}", found.warnings);
             assert!(found.warnings[0].contains("boom"), "{:?}", found.warnings);
             assert!(found.warnings[0].contains("falling back to git"));
@@ -2184,6 +2197,7 @@ mod tests {
         assert_eq!(found.candidates, offline.candidates);
         assert_eq!(found.warnings.len(), 1);
         assert!(found.warnings[0].contains("odd host"));
+        assert!(!found.forge_answered);
 
         // A forge with no remote at all has nobody to ask.
         let mut nobody = FakeForge::merged(&[]);

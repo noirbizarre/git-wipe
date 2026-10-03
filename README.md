@@ -638,8 +638,8 @@ CLI flags:
    advanced far enough for the content-based strategies above to lose the
    trail. Because a deleted upstream does *not* prove the branch was merged
    (someone may simply have deleted an unmerged remote branch), these entries
-   are **listed unchecked** in the multiselect and are never auto-selected by
-   `--yes` unless you also pass `--delete-gone`. Detection requires up-to-date
+   are never auto-selected by `--yes` unless you also pass `--delete-gone`
+   (in the interactive multiselect, see below for what is pre-checked). Detection requires up-to-date
     remote-tracking refs, so it only runs after a successful `fetch --prune`,
     or in `--dry-run` where a warning notes the results may be stale. `git wipe
     status` never fetches: it reports `gone` from the refs as they are on disk,
@@ -648,8 +648,13 @@ CLI flags:
    All cleanup items are presented in a **single unified multiselect**:
    merged branches (with their worktree path shown when applicable), branches
    with a deleted upstream, and orphan worktrees (worktrees whose branch no
-   longer exists locally). Merged branches default to selected;
-   deleted-upstream branches and orphan worktrees default to unselected.
+   longer exists locally). Orphan worktrees default to unselected.
+   Without a forge, merged and deleted-upstream branches default to selected,
+   except those whose worktree has uncommitted changes. When the forge is
+   consulted and answers, it is the authority: only `pr-merged` branches
+   default to selected (locally and on remotes), and branches found by git
+   alone are listed unchecked. If the forge cannot be reached, the
+   no-forge rules apply.
 
    Two cases are handled outside that multiselect. Worktrees that are dirty
    (uncommitted or untracked changes) are collected into a **second

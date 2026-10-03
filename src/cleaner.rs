@@ -92,6 +92,23 @@ pub struct CleanerOptions {
     pub jobs: usize,
 }
 
+/// Whether a local branch is pre-checked in the interactive prompt.
+///
+/// With a forge verdict (`forge_decided`), the forge is the authority: only
+/// `pr-merged` branches are checked, and whatever git alone found (merged or
+/// deleted upstream) is listed unchecked. Without one, git's findings are
+/// trusted, a deleted upstream included (the usual footprint of a merged pull
+/// request), except when the branch's worktree holds uncommitted changes.
+fn default_selected(forge_decided: bool, is_pr: bool, dirty_worktree: bool) -> bool {
+    if is_pr {
+        true
+    } else if forge_decided {
+        false
+    } else {
+        !dirty_worktree
+    }
+}
+
 /// Run the full clean-up workflow.
 ///
 /// Returns a structured [`Report`] of everything that was detected and done;
@@ -284,6 +301,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             warn(ui, &mut report, warning);
         }
         let pr_merged = merged.pr_merged;
+        let forge_decided = merged.forge_answered;
         let merged = merged.candidates;
 
         // Branches whose upstream was deleted. Only meaningful with fresh
@@ -466,9 +484,37 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             let mut defaults: Vec<bool> = Vec::new();
             let mut hints: Vec<String> = Vec::new();
 
+            // Without a forge verdict, a branch whose worktree holds
+            // uncommitted changes is not pre-selected: it may be fresh work
+            // rather than finished work. Only probed when it can matter.
+            let dirty_set: HashSet<&String> = if opts.yes || opts.no_worktrees || forge_decided {
+                HashSet::new()
+            } else {
+                let to_probe: Vec<(&String, &Worktree)> = candidates
+                    .iter()
+                    .filter_map(|branch| wt_map.get(branch).map(|wt| (branch, wt)))
+                    .filter(|(_, wt)| worktree_guard(wt, &young, &small).is_none())
+                    .collect();
+                let probes = parallel::map(&to_probe, opts.jobs, |_, (_, wt)| {
+                    git.worktree_dirty(&wt.path).map_err(|e| {
+                        format!("Could not check status of '{}': {e}", tilde_path(&wt.path))
+                    })
+                });
+                let mut dirty = HashSet::new();
+                for ((branch, _), probe) in to_probe.iter().zip(probes) {
+                    match probe {
+                        Ok(true) => {
+                            dirty.insert(*branch);
+                        }
+                        Ok(false) => {}
+                        Err(message) => warn(ui, &mut report, &message),
+                    }
+                }
+                dirty
+            };
+
             // Branch candidates (with worktree path shown in label if
-            // applicable). Deleted-upstream branches are listed but left
-            // unchecked: the signal does not prove they were merged.
+            // applicable). See `default_selected` for what is pre-checked.
             for branch in &candidates {
                 values.push(format!("branch:{branch}"));
                 let is_gone = gone_set.contains(branch);
@@ -500,7 +546,11 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         String::new()
                     });
                 }
-                defaults.push(!is_gone);
+                defaults.push(default_selected(
+                    forge_decided,
+                    is_pr,
+                    dirty_set.contains(branch),
+                ));
             }
 
             // Orphan worktrees.
@@ -539,9 +589,9 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             } else {
                 "Select branches to delete".to_string()
             };
-            if has_gone {
+            if forge_decided && has_branches {
                 // Explain the unchecked entries where the user reads them.
-                prompt.push_str(" (deleted upstreams unchecked: not proof of a merge)");
+                prompt.push_str(" (only pr-merged branches are pre-selected)");
             }
 
             let selected = if opts.yes {
@@ -1030,6 +1080,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 warn(ui, &mut report, warning);
             }
             let pr_merged = merged.pr_merged;
+            let forge_decided = merged.forge_answered;
             let merged = merged.candidates;
 
             if merged.is_empty() {
@@ -1066,7 +1117,11 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             let to_delete = if opts.yes {
                 merged.clone()
             } else {
-                let defaults: Vec<bool> = vec![true; merged.len()];
+                // With a forge verdict only pr-merged branches are checked.
+                let defaults: Vec<bool> = merged
+                    .iter()
+                    .map(|b| !forge_decided || pr_merged.contains(b))
+                    .collect();
                 ui.multi_select(
                     "Select branches to delete",
                     &merged,
@@ -1566,6 +1621,20 @@ mod tests {
             local_only: true,
             ..opts_yes_skip_network()
         }
+    }
+
+    #[test]
+    fn with_a_forge_verdict_only_pr_merged_branches_are_preselected() {
+        assert!(default_selected(true, true, false));
+        assert!(default_selected(true, true, true));
+        assert!(!default_selected(true, false, false));
+        assert!(!default_selected(true, false, true));
+    }
+
+    #[test]
+    fn without_a_forge_everything_is_preselected_but_dirty_worktrees() {
+        assert!(default_selected(false, false, false));
+        assert!(!default_selected(false, false, true));
     }
 
     #[test]
