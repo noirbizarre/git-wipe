@@ -298,11 +298,8 @@ fn handle_config_command(
 
         ConfigAction::Set { key, value } => {
             let full_key = format!("{}.{key}", config::SECTION);
-            if key == "forge" {
-                value
-                    .parse::<forge::ForgeSetting>()
-                    .with_context(|| format!("invalid value for {full_key}"))?;
-            }
+            config::validate_value(&key, &value)
+                .with_context(|| format!("invalid value for {full_key}"))?;
             if is_multi_valued(&key) {
                 // `git config --local <key> <value>` refuses a key that already
                 // holds several values. Treat `set` as "replace every value"

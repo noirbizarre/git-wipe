@@ -42,6 +42,48 @@ fn parse_jobs(input: &str) -> Result<u32> {
     Ok(jobs)
 }
 
+/// Parse a `wipe.worktrunk` value with git's own boolean spellings.
+fn parse_bool(input: &str) -> Result<bool> {
+    crate::git::parse_git_bool(input).with_context(|| {
+        format!("'{input}' is not a boolean (use true/false, yes/no, on/off or 1/0)")
+    })
+}
+
+/// Check that `value` is acceptable for the `[wipe]` key `key`, using the same
+/// parsers as [`Config::try_load`].
+///
+/// `config set` runs this before writing, so a bad value is refused up front
+/// instead of making every later command fail with "invalid wipe.<key>".
+/// Unknown keys are refused too: they would be written and then ignored.
+pub fn validate_value(key: &str, value: &str) -> Result<()> {
+    match key {
+        "protected" | "ignore" | "remote" => {}
+        "worktrunk" => {
+            parse_bool(value)?;
+        }
+        "effort" => {
+            value.parse::<Effort>()?;
+        }
+        "minage" => {
+            value.parse::<MinAge>()?;
+        }
+        "minsize" => {
+            value.parse::<Size>()?;
+        }
+        "jobs" => {
+            parse_jobs(value)?;
+        }
+        "forge" => {
+            value.parse::<ForgeSetting>()?;
+        }
+        _ => anyhow::bail!(
+            "unknown key '{key}', expected one of: protected, ignore, remote, worktrunk, \
+             effort, minage, minsize, jobs, forge"
+        ),
+    }
+    Ok(())
+}
+
 /// Stored configuration from the `[wipe]` git config section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -117,7 +159,9 @@ impl Config {
 
         let worktrunk = git
             .config_get(&format!("{SECTION}.worktrunk"))?
-            .map(|v| v.eq_ignore_ascii_case("true"));
+            .map(|v| parse_bool(&v))
+            .transpose()
+            .with_context(|| format!("invalid {SECTION}.worktrunk in git config"))?;
 
         let effort = git
             .config_get(&format!("{SECTION}.effort"))?
@@ -449,6 +493,61 @@ pub fn load_or_setup(git: &Git, ui: &Ui) -> Result<Config> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_value_accepts_what_try_load_accepts() {
+        for (key, value) in [
+            ("protected", "release/*"),
+            ("ignore", "wip/*"),
+            ("remote", "origin"),
+            ("worktrunk", "yes"),
+            ("worktrunk", "false"),
+            ("effort", "3"),
+            ("minage", "2h"),
+            ("minsize", "100M"),
+            ("jobs", "4"),
+            ("forge", "gitlab"),
+        ] {
+            assert!(
+                validate_value(key, value).is_ok(),
+                "{key}={value} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_value_rejects_bad_values_and_unknown_keys() {
+        for (key, value) in [
+            ("worktrunk", "maybe"),
+            ("effort", "9"),
+            ("minage", "soon"),
+            ("minsize", "big"),
+            ("jobs", "0"),
+            ("forge", "bitbucket"),
+            ("nonsense", "x"),
+        ] {
+            assert!(
+                validate_value(key, value).is_err(),
+                "{key}={value} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn worktrunk_uses_git_boolean_spellings() -> Result<()> {
+        let (_dir, git) = crate::test_helpers::init_repo()?;
+        git.config_add("wipe.protected", "main")?;
+
+        git.config_set("wipe.worktrunk", "on")?;
+        assert_eq!(Config::try_load(&git)?.unwrap().worktrunk, Some(true));
+
+        git.config_set("wipe.worktrunk", "no")?;
+        assert_eq!(Config::try_load(&git)?.unwrap().worktrunk, Some(false));
+
+        git.config_set("wipe.worktrunk", "maybe")?;
+        assert!(Config::try_load(&git).is_err());
+        Ok(())
+    }
 
     #[test]
     fn config_load_returns_none_when_not_configured() -> Result<()> {

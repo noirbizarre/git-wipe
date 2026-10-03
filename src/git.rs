@@ -196,6 +196,19 @@ fn is_unset_key(err: &anyhow::Error) -> bool {
         .is_some_and(|gerr| gerr.exit_code == Some(1))
 }
 
+/// Parse a boolean the way `git config --type=bool` does: `true`, `yes`, `on`
+/// and `1` against `false`, `no`, `off` and `0`, case-insensitively.
+///
+/// `None` for anything else, so callers can reject a typo instead of silently
+/// reading it as `false`.
+pub fn parse_git_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Some(true),
+        "false" | "no" | "off" | "0" => Some(false),
+        _ => None,
+    }
+}
+
 /// Whether a `git config --unset` failure just means "there was nothing to
 /// unset".
 ///
@@ -1119,7 +1132,7 @@ impl Git {
                     // Each line: "branch.<name>.<suffix> true"
                     let mut parts = line.splitn(2, ' ');
                     if let (Some(key), Some(value)) = (parts.next(), parts.next())
-                        && value.trim().eq_ignore_ascii_case("true")
+                        && parse_git_bool(value) == Some(true)
                     {
                         // Extract branch name from "branch.<name>.<suffix>"
                         if let Some(name) = key

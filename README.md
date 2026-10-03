@@ -337,7 +337,8 @@ git wipe config list
 # Re-run the interactive setup wizard
 git wipe config setup
 
-# Set a configuration value directly
+# Set a configuration value directly (the value is validated, and unknown
+# keys are refused)
 git wipe config set worktrunk false
 
 # Add a protected branch pattern
@@ -396,7 +397,7 @@ to the repository-local `.git/config`:
 | `protected` | multi-value | Glob patterns for branches that should never be deleted |
 | `ignore` | multi-value | Glob patterns for branches git-wipe ignores entirely |
 | `remote` | multi-value | Remotes to delete branches from (omit for all remotes) |
-| `worktrunk` | bool | Enable/disable [worktrunk](https://worktrunk.dev) for worktree removal. When omitted, auto-detects (see below) |
+| `worktrunk` | bool (`true`/`false`, `yes`/`no`, `on`/`off`, `1`/`0`) | Enable/disable [worktrunk](https://worktrunk.dev) for worktree removal. When omitted, auto-detects (see below) |
 | `effort` | `1`-`3` | How thorough merge detection should be. Defaults to `2`; `--effort` overrides it |
 | `minage` | duration | Minimum age a worktree must have before it may be removed, e.g. `30s`, `2h`, `7d`. Defaults to `0s` (no guard); `--min-age` overrides it |
 | `minsize` | size | Minimum on-disk size a worktree must have before it may be removed, e.g. `512B`, `100K`, `100M`, `2G`. Defaults to `0B` (no guard); `--min-size` overrides it |
