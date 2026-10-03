@@ -308,6 +308,17 @@ impl Git {
             .take()
             .with_context(|| format!("failed to capture stdout of: git {}", first.join(" ")))?;
 
+        // Drain stderr concurrently: left unread, a chatty first command could
+        // fill the pipe and block, which would stall the second one on EOF.
+        let first_stderr = first_child.stderr.take().map(|mut stderr| {
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut buf = Vec::new();
+                let _ = stderr.read_to_end(&mut buf);
+                buf
+            })
+        });
+
         let mut second_cmd = Command::new("git");
         second_cmd.args(second);
         if let Some(dir) = &self.workdir {
@@ -327,15 +338,19 @@ impl Git {
             .wait()
             .with_context(|| format!("failed to wait for: git {}", first.join(" ")))?;
 
-        if !first_status.success() {
-            anyhow::bail!(
-                "git {} failed (exit status: {})",
-                first.join(" "),
-                first_status
-                    .code()
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| "signal".into())
-            );
+        let first_output = std::process::Output {
+            status: first_status,
+            stdout: Vec::new(),
+            stderr: first_stderr
+                .map(|handle| handle.join().unwrap_or_default())
+                .unwrap_or_default(),
+        };
+        if !first_output.status.success() {
+            return Err(anyhow::Error::new(command_error(
+                "git",
+                first,
+                &first_output,
+            )));
         }
         if !second_output.status.success() {
             return Err(anyhow::Error::new(command_error(
@@ -346,7 +361,7 @@ impl Git {
         }
 
         Ok(String::from_utf8_lossy(&second_output.stdout)
-            .trim_end()
+            .trim()
             .to_string())
     }
 
