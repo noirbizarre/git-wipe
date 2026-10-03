@@ -119,7 +119,10 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         git.fetch_remote_prune(remote, &config.ignore)
                     });
                     match result {
-                        Ok(()) => {
+                        Ok(prune_warning) => {
+                            if let Some(message) = prune_warning {
+                                warn(ui, &mut report, &message);
+                            }
                             succeeded += 1;
                             ui.success(&format!("{} updated.", console::style(remote).cyan()));
                             report.fetch.remotes.push(RemoteFetch {
