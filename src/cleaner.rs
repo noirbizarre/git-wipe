@@ -52,7 +52,8 @@ fn join_with_and(parts: &[String]) -> String {
 #[derive(Debug, Clone, Default)]
 pub struct CleanerOptions {
     pub yes: bool,
-    /// Force-remove worktrees that are dirty or hold unmerged commits.
+    /// Force-remove dirty worktrees (those with uncommitted changes). It drives
+    /// the forced-removal prompt and nothing else.
     pub force: bool,
     pub dry_run: bool,
     pub no_fetch: bool,

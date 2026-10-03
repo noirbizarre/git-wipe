@@ -23,10 +23,10 @@ pub struct Cli {
     #[arg(short = 'y', long)]
     pub yes: bool,
 
-    /// Force-remove worktrees with uncommitted changes or unmerged commits
+    /// Force-remove worktrees with uncommitted changes
     ///
     /// Without this flag the forced-removal prompt defaults to nothing
-    /// selected, and with --yes (or --json) problematic worktrees are skipped
+    /// selected, and with --yes (or --json) dirty worktrees are skipped
     /// entirely. Interactively, --force pre-selects them; you can still
     /// uncheck any entry.
     #[arg(short = 'f', long)]

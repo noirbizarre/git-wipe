@@ -639,16 +639,19 @@ CLI flags:
    deleted-upstream branches and orphan worktrees default to unselected.
 
    Two cases are handled outside that multiselect. Worktrees that are dirty
-   (uncommitted or untracked changes) or hold unmerged commits are collected
-   into a **second multiselect** for forced removal, defaulting to unselected;
+   (uncommitted or untracked changes) are collected into a **second
+   multiselect** for forced removal, defaulting to unselected;
    anything left unselected there is skipped entirely, with neither the
    worktree removed nor the branch deleted. `--force` drives this prompt and
    nothing else: interactively it pre-selects every entry (each can still be
    unchecked), and under `--yes` it force-removes them all without prompting.
    `--yes` on its own — including via `--json` — skips them, so a
    non-interactive run never destroys uncommitted work. Separately, a selected branch whose
-   commits are unreachable from any merge target is force-deleted
-   automatically, with an informational line rather than a prompt.
+   worktree is clean but whose commits are unreachable from any merge target
+   is force-deleted automatically, with an informational line rather than a
+   prompt. That check only runs when worktrunk is enabled; a dirty worktree
+   that also holds such commits is listed in the forced-removal prompt with a
+   `dirty + unmerged commits` hint.
 
    For selected branches that have worktrees, the worktree is removed first,
    then the branch is deleted with `git branch -D` (force-delete is safe here
