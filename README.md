@@ -629,8 +629,10 @@ CLI flags:
    (someone may simply have deleted an unmerged remote branch), these entries
    are **listed unchecked** in the multiselect and are never auto-selected by
    `--yes` unless you also pass `--delete-gone`. Detection requires up-to-date
-   remote-tracking refs, so it only runs after a successful `fetch --prune`,
-   or in `--dry-run` where a warning notes the results may be stale.
+    remote-tracking refs, so it only runs after a successful `fetch --prune`,
+    or in `--dry-run` where a warning notes the results may be stale. `git wipe
+    status` never fetches: it reports `gone` from the refs as they are on disk,
+    with the same staleness warning.
 
    All cleanup items are presented in a **single unified multiselect**:
    merged branches (with their worktree path shown when applicable), branches
@@ -737,7 +739,7 @@ flowchart TD
     FindLocal --> PatchID["Patch-ID matching\ngit patch-id\n(effort 3)"]
     FindLocal --> SimMerge["Simulated merge\ngit merge-tree --write-tree\n(effort 3)"]
     FindLocal --> Squash["Squash-merge detection\ncombined patch-id\n(effort 3)"]
-    FindLocal --> GoneUpstream[Deleted-upstream detection\nrequires a fetch]
+    FindLocal --> GoneUpstream[Deleted-upstream detection\nrequires a fetch (or --dry-run)]
     FindLocal --> Orphans[Find orphan worktrees]
     ForgeAsk --> SelectLocal
     Merged --> SelectLocal[Unified multiselect:\nbranches + worktrees]
