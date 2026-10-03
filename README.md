@@ -334,7 +334,8 @@ Each entry has:
 # Display current configuration
 git wipe config list
 
-# Re-run the interactive setup wizard
+# Re-run the interactive setup wizard (starts from the current values:
+# press Enter at every step to keep the configuration unchanged)
 git wipe config setup
 
 # Set a configuration value directly (the value is validated, and unknown
@@ -541,6 +542,12 @@ setup wizard runs automatically:
 4. Lists available remotes and asks which ones to operate on
 5. If [worktrunk](https://worktrunk.dev) (`wt`) is detected on `$PATH`, asks whether to use it for worktree removal
 6. If a remote points at a known forge (GitHub, GitLab, Gitea or Forgejo, recognised from its URL alone, with no network access), asks whether to enable [forge detection](#forge-detection). With remotes on different forges, the question names each remote and its forge. Declining, or having no recognisable forge, keeps the offline behaviour; `git wipe config setup` reruns the wizard at any time
+
+When re-run on an already configured repository, every step is pre-filled from
+the current settings (protected branches and patterns, ignored patterns,
+remotes, worktrunk and forge), so pressing Enter at each step saves the same
+configuration. Settings the wizard does not ask about (`effort`, `minage`,
+`minsize`, `jobs`) are kept as they are.
 
 ## How it works
 
