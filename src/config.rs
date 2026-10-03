@@ -311,6 +311,7 @@ impl Config {
         let existing = Self::try_load(git).ok().flatten();
         if existing.is_some() {
             ui.heading("Reconfiguring git-wipe.");
+            ui.muted("  Current values are pre-filled: press Enter at each step to keep them.");
         } else {
             ui.heading("No configuration found. Let's set up git-wipe.");
         }
@@ -325,14 +326,19 @@ impl Config {
             ui.warning("No local branches found.");
         }
 
-        // Build selection list: branches + ability to add patterns
-        let defaults: Vec<bool> = branches
-            .iter()
-            .map(|b| well_known.contains(&b.as_str()))
-            .collect();
+        // Build selection list: branches + ability to add patterns. On a
+        // re-run the current patterns drive the defaults.
+        let (defaults, extra_default) =
+            protected_defaults(&branches, &well_known, existing.as_ref());
 
         let mut protected: Vec<String> = if branches.is_empty() {
-            vec!["main".to_string()]
+            // Nothing to select from: on a re-run the existing patterns come
+            // back through the text prompt below.
+            if existing.is_some() {
+                Vec::new()
+            } else {
+                vec!["main".to_string()]
+            }
         } else {
             ui.multi_select(
                 "Which branches should be protected from deletion?",
@@ -346,9 +352,10 @@ impl Config {
 
         let extra = ui.input(
             "Additional patterns to protect (comma-separated, e.g. release/*)",
-            "",
+            &extra_default,
         )?;
         protected.extend(parse_patterns(&extra));
+        let mut protected = order_like(protected, existing.as_ref().map(|c| &c.protected[..]));
 
         if protected.is_empty() {
             protected.push("main".to_string());
@@ -359,9 +366,13 @@ impl Config {
 
         // ── Ignored branches ─────────────────────────────────────────
 
+        let ignore_default = existing
+            .as_ref()
+            .map(|c| c.ignore.join(", "))
+            .unwrap_or_default();
         let ignore_input = ui.input(
             "Branch patterns to ignore entirely (comma-separated, e.g. wip/*)",
-            "",
+            &ignore_default,
         )?;
         let ignore = parse_patterns(&ignore_input);
 
@@ -374,7 +385,7 @@ impl Config {
             ui.muted("No remotes configured.");
             None
         } else {
-            let defaults: Vec<bool> = available_remotes.iter().map(|r| r == "origin").collect();
+            let defaults = remote_defaults(&available_remotes, existing.as_ref());
             let selected = ui.multi_select(
                 "Which remotes should merged branches be deleted from?",
                 &available_remotes,
@@ -383,11 +394,7 @@ impl Config {
                 &[],
                 false,
             )?;
-            if selected.is_empty() {
-                None
-            } else {
-                Some(selected)
-            }
+            resolve_remotes(selected, &available_remotes, existing.as_ref())
         };
 
         ui.blank();
@@ -395,10 +402,12 @@ impl Config {
         // ── Worktrunk integration ────────────────────────────────────
         let worktrunk = if crate::git::worktrunk_available() {
             ui.blank();
-            let use_wt = ui.confirm(WORKTRUNK_PROMPT, true)?;
+            let default = existing.as_ref().and_then(|c| c.worktrunk).unwrap_or(true);
+            let use_wt = ui.confirm(WORKTRUNK_PROMPT, default)?;
             Some(use_wt)
         } else {
-            None
+            // Not asked, so keep whatever was stored.
+            existing.as_ref().and_then(|c| c.worktrunk)
         };
 
         // ── Forge ────────────────────────────────────────────────────
@@ -451,10 +460,116 @@ fn forge_step(git: &Git, ui: &Ui, current: Option<ForgeSetting>) -> Option<Forge
 
     ui.blank();
     let question = forge_question(&detections);
-    match ui.confirm(&question, current.is_some()) {
-        Ok(true) => Some(ForgeSetting::Auto),
-        _ => None,
+    let confirmed = ui
+        .confirm(&question, forge_default(current))
+        .unwrap_or(false);
+    forge_result(current, confirmed)
+}
+
+/// Whether the forge question is pre-answered "yes": only when it is enabled.
+fn forge_default(current: Option<ForgeSetting>) -> bool {
+    current.is_some_and(ForgeSetting::is_enabled)
+}
+
+/// The setting to store given the answer.
+///
+/// "Yes" keeps an enabled setting as it is (a specific kind must not be
+/// downgraded to auto-detection), and "no" keeps an explicit `false`.
+fn forge_result(current: Option<ForgeSetting>, confirmed: bool) -> Option<ForgeSetting> {
+    if confirmed {
+        current
+            .filter(|f| f.is_enabled())
+            .or(Some(ForgeSetting::Auto))
+    } else {
+        current.filter(|f| !f.is_enabled())
     }
+}
+
+/// Defaults for the protected-branches step, as the multi-select preselection
+/// and the text prompt for patterns that are not local branch names.
+///
+/// With no existing configuration the well-known branch names are selected.
+/// Otherwise the existing patterns are: those naming a local branch are
+/// selected, and the others (globs, deleted branches) go in the text prompt so
+/// they are not silently dropped.
+fn protected_defaults(
+    branches: &[String],
+    well_known: &[&str],
+    existing: Option<&Config>,
+) -> (Vec<bool>, String) {
+    match existing {
+        None => (
+            branches
+                .iter()
+                .map(|b| well_known.contains(&b.as_str()))
+                .collect(),
+            String::new(),
+        ),
+        Some(config) => {
+            let selected = branches
+                .iter()
+                .map(|b| config.protected.contains(b))
+                .collect();
+            let extra = config
+                .protected
+                .iter()
+                .filter(|p| !branches.contains(p))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            (selected, extra)
+        }
+    }
+}
+
+/// Preselection for the remotes step: the existing remotes (all of them when
+/// the setting is "all remotes"), or `origin` on a first run.
+fn remote_defaults(available: &[String], existing: Option<&Config>) -> Vec<bool> {
+    match existing {
+        None => available.iter().map(|r| r == "origin").collect(),
+        Some(config) => match &config.remotes {
+            None => vec![true; available.len()],
+            Some(list) => available.iter().map(|r| list.contains(r)).collect(),
+        },
+    }
+}
+
+/// Turn the remotes selection into the stored setting.
+///
+/// Nothing selected means all remotes. So does selecting every remote when the
+/// setting already was "all remotes", so a re-run keeps covering remotes added
+/// later.
+fn resolve_remotes(
+    selected: Vec<String>,
+    available: &[String],
+    existing: Option<&Config>,
+) -> Option<Vec<String>> {
+    if selected.is_empty() {
+        return None;
+    }
+    let was_all = existing.is_some_and(|c| c.remotes.is_none());
+    if was_all && available.iter().all(|r| selected.contains(r)) {
+        return None;
+    }
+    let previous = existing.and_then(|c| c.remotes.as_deref());
+    Some(order_like(selected, previous))
+}
+
+/// Deduplicate `items`, ordering those present in `previous` as they were
+/// there and the rest after them, so an unchanged answer rewrites the same
+/// config values in the same order.
+fn order_like(items: Vec<String>, previous: Option<&[String]>) -> Vec<String> {
+    let mut unique: Vec<String> = Vec::with_capacity(items.len());
+    for item in items {
+        if !unique.contains(&item) {
+            unique.push(item);
+        }
+    }
+    if let Some(previous) = previous {
+        // Stable sort: unknown items share the same key and keep their order.
+        unique.sort_by_key(|i| previous.iter().position(|p| p == i).unwrap_or(usize::MAX));
+    }
+    unique
 }
 
 /// The prompt offering forge detection, spelling out which remote is which.
@@ -1016,5 +1131,156 @@ mod tests {
         assert!(question.contains("different forges"), "{question}");
         assert!(question.contains("origin (GitHub on github.com)"));
         assert!(question.contains("mirror (GitLab on gitlab.com)"));
+    }
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    const WELL_KNOWN: [&str; 4] = ["main", "master", "develop", "development"];
+
+    #[test]
+    fn protected_defaults_use_well_known_names_on_first_run() {
+        let branches = strings(&["main", "feature", "develop"]);
+        let (selected, extra) = protected_defaults(&branches, &WELL_KNOWN, None);
+        assert_eq!(selected, vec![true, false, true]);
+        assert_eq!(extra, "");
+    }
+
+    #[test]
+    fn protected_defaults_follow_existing_patterns() {
+        let branches = strings(&["main", "dev"]);
+        let config = Config {
+            protected: strings(&["main", "release/*", "gone"]),
+            ..Config::default()
+        };
+        let (selected, extra) = protected_defaults(&branches, &WELL_KNOWN, Some(&config));
+        // `master`-style well-known names are not forced back on.
+        assert_eq!(selected, vec![true, false]);
+        assert_eq!(extra, "release/*, gone");
+    }
+
+    #[test]
+    fn remote_defaults_follow_existing_setting() {
+        let available = strings(&["origin", "upstream"]);
+        assert_eq!(remote_defaults(&available, None), vec![true, false]);
+
+        let subset = Config {
+            remotes: Some(strings(&["upstream"])),
+            ..Config::default()
+        };
+        assert_eq!(
+            remote_defaults(&available, Some(&subset)),
+            vec![false, true]
+        );
+
+        let all = Config {
+            remotes: None,
+            ..Config::default()
+        };
+        assert_eq!(remote_defaults(&available, Some(&all)), vec![true, true]);
+    }
+
+    #[test]
+    fn resolve_remotes_keeps_all_remotes_semantics() {
+        let available = strings(&["origin", "upstream"]);
+        let all = Config {
+            remotes: None,
+            ..Config::default()
+        };
+        // Everything selected on an "all remotes" config stays "all".
+        assert_eq!(
+            resolve_remotes(available.clone(), &available, Some(&all)),
+            None
+        );
+        // A subset is stored explicitly.
+        assert_eq!(
+            resolve_remotes(strings(&["origin"]), &available, Some(&all)),
+            Some(strings(&["origin"]))
+        );
+        // First run with everything selected is explicit, as before.
+        assert_eq!(
+            resolve_remotes(available.clone(), &available, None),
+            Some(available.clone())
+        );
+        // Nothing selected means all.
+        assert_eq!(resolve_remotes(Vec::new(), &available, None), None);
+    }
+
+    #[test]
+    fn resolve_remotes_keeps_previous_order() {
+        let available = strings(&["origin", "upstream"]);
+        let config = Config {
+            remotes: Some(strings(&["upstream", "origin"])),
+            ..Config::default()
+        };
+        assert_eq!(
+            resolve_remotes(available.clone(), &available, Some(&config)),
+            Some(strings(&["upstream", "origin"]))
+        );
+    }
+
+    #[test]
+    fn forge_answers_preserve_existing_setting() {
+        use crate::forge::ForgeKind;
+        let kind = Some(ForgeSetting::Kind(ForgeKind::GitLab));
+
+        assert!(!forge_default(None));
+        assert!(!forge_default(Some(ForgeSetting::Off)));
+        assert!(forge_default(Some(ForgeSetting::Auto)));
+        assert!(forge_default(kind));
+
+        assert_eq!(forge_result(None, true), Some(ForgeSetting::Auto));
+        assert_eq!(forge_result(None, false), None);
+        assert_eq!(
+            forge_result(Some(ForgeSetting::Off), true),
+            Some(ForgeSetting::Auto)
+        );
+        assert_eq!(
+            forge_result(Some(ForgeSetting::Off), false),
+            Some(ForgeSetting::Off)
+        );
+        assert_eq!(forge_result(kind, true), kind);
+        assert_eq!(forge_result(kind, false), None);
+    }
+
+    /// Feeding the defaults back as the answers must rebuild the same config.
+    #[test]
+    fn defaults_fed_back_reproduce_the_config() {
+        let branches = strings(&["main", "dev", "topic"]);
+        let available = strings(&["origin", "upstream"]);
+        let config = Config {
+            protected: strings(&["release/*", "main", "dev"]),
+            ignore: strings(&["wip/*", "tmp/*"]),
+            remotes: Some(strings(&["upstream", "origin"])),
+            ..Config::default()
+        };
+
+        let (selected_flags, extra) = protected_defaults(&branches, &WELL_KNOWN, Some(&config));
+        let selected: Vec<String> = branches
+            .iter()
+            .zip(&selected_flags)
+            .filter(|(_, on)| **on)
+            .map(|(b, _)| b.clone())
+            .collect();
+        let mut protected = selected;
+        protected.extend(parse_patterns(&extra));
+        let protected = order_like(protected, Some(&config.protected));
+        assert_eq!(protected, config.protected);
+
+        let ignore = parse_patterns(&config.ignore.join(", "));
+        assert_eq!(ignore, config.ignore);
+
+        let flags = remote_defaults(&available, Some(&config));
+        let picked: Vec<String> = available
+            .iter()
+            .zip(&flags)
+            .filter(|(_, on)| **on)
+            .map(|(r, _)| r.clone())
+            .collect();
+        assert_eq!(
+            resolve_remotes(picked, &available, Some(&config)),
+            config.remotes
+        );
     }
 }
