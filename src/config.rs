@@ -16,6 +16,11 @@ use crate::ui::Ui;
 /// The git config section name used for all git-wipe settings.
 pub const SECTION: &str = "wipe";
 
+/// The question asked, by the wizard and at run time alike, before worktrunk
+/// is used for worktree removal.
+pub const WORKTRUNK_PROMPT: &str =
+    "Worktrunk (wt) detected. Use it for worktree removal (triggers pre/post-remove hooks)?";
+
 /// Split a comma-separated prompt answer into trimmed, non-empty patterns.
 fn parse_patterns(input: &str) -> Vec<String> {
     input
@@ -390,10 +395,7 @@ impl Config {
         // ── Worktrunk integration ────────────────────────────────────
         let worktrunk = if crate::git::worktrunk_available() {
             ui.blank();
-            let use_wt = ui.confirm(
-                "Worktrunk (wt) detected. Use it for worktree removal (triggers pre/post-remove hooks)?",
-                true,
-            )?;
+            let use_wt = ui.confirm(WORKTRUNK_PROMPT, true)?;
             Some(use_wt)
         } else {
             None
@@ -422,7 +424,9 @@ impl Config {
         };
         config.save(git)?;
 
-        ui.success("Configuration saved to git config [wipe] section.");
+        ui.success(&format!(
+            "Configuration saved to git config [{SECTION}] section."
+        ));
         ui.blank();
 
         Ok(config)

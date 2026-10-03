@@ -134,8 +134,9 @@ pub fn identify(setting: ForgeSetting, url: &str) -> Result<(ForgeKind, RemoteUr
         ForgeSetting::Kind(kind) => kind,
         ForgeSetting::Auto => ForgeKind::detect_host(&project.host).ok_or_else(|| {
             format!(
-                "cannot tell which forge '{}' runs; set wipe.forge to github, gitlab, gitea or forgejo",
-                project.host
+                "cannot tell which forge '{}' runs; set {}.forge to github, gitlab, gitea or forgejo",
+                project.host,
+                crate::config::SECTION
             )
         })?,
     };

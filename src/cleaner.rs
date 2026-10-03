@@ -294,12 +294,11 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             let gone = ui.spinner("Scanning for deleted upstreams…", || {
                 find_gone_local(git, &filter, &merged)
             })?;
+            // Unlike `status`, which never fetches and so warns whenever it
+            // reports a `gone` entry, a wipe run only warns when no fetch
+            // succeeded to refresh the refs first.
             if !gone.is_empty() && !fetch_succeeded {
-                warn(
-                    ui,
-                    &mut report,
-                    "Remotes were not fetched; deleted-upstream detection may be stale.",
-                );
+                warn(ui, &mut report, crate::status::STALE_GONE_WARNING);
             }
             gone
         } else {
@@ -785,7 +784,10 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         let (force, force_delete) =
                             force_map.get(branch).copied().unwrap_or((false, false));
                         if opts.dry_run {
-                            ui.dry_run(&format!("Would remove worktree '{}'.", wt.path.display()));
+                            ui.dry_run(&format!(
+                                "Would remove worktree '{}'.",
+                                tilde_path(&wt.path)
+                            ));
                             if opts.use_worktrunk {
                                 wt_handled_branches.insert(branch.clone());
                             }
@@ -849,7 +851,10 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         continue;
                     }
                     if opts.dry_run {
-                        ui.dry_run(&format!("Would remove worktree '{}'.", wt.path.display()));
+                        ui.dry_run(&format!(
+                            "Would remove worktree '{}'.",
+                            tilde_path(&wt.path)
+                        ));
                         report.local.worktrees.push(WorktreeEntry {
                             path: path_string(&wt.path),
                             branch: wt.branch.clone(),
@@ -1221,18 +1226,18 @@ fn format_locked_skip_message(wt: &Worktree) -> String {
                 return format!(
                     "  Skipping locked worktree '{}' (branch: {branch_label}): \
                      owner (pid {pid}) is still running ({reason}).",
-                    wt.path.display()
+                    tilde_path(&wt.path)
                 );
             }
             format!(
                 "  Skipping locked worktree '{}' (branch: {branch_label}): {reason}",
-                wt.path.display()
+                tilde_path(&wt.path)
             )
         }
         None => {
             format!(
                 "  Skipping locked worktree '{}' (branch: {branch_label}).",
-                wt.path.display()
+                tilde_path(&wt.path)
             )
         }
     }
@@ -1274,7 +1279,7 @@ fn resolve_stale_lock(
         ui.dry_run(&format!(
             "Would unlock stale lock on worktree '{}' (branch: {branch_label}): \
              pid {pid} is no longer running (reason: {reason}).",
-            wt.path.display()
+            tilde_path(&wt.path)
         ));
     } else if let Err(err) = git.worktree_unlock(&wt.path) {
         fail_path(ui, report, "unlock", &wt.path, &err);
@@ -1283,7 +1288,7 @@ fn resolve_stale_lock(
         ui.muted(&format!(
             "Unlocked stale lock on worktree '{}' (branch: {branch_label}): \
              pid {pid} is no longer running (reason: {reason}).",
-            wt.path.display()
+            tilde_path(&wt.path)
         ));
     }
 
@@ -1305,7 +1310,7 @@ fn format_too_young_skip_message(wt: &Worktree, min_age: MinAge) -> String {
     let branch_label = wt.branch.as_deref().unwrap_or("detached");
     format!(
         "  Skipping recent worktree '{}' (branch: {branch_label}): changed less than {min_age} ago.",
-        wt.path.display()
+        tilde_path(&wt.path)
     )
 }
 
@@ -1314,7 +1319,7 @@ fn format_too_small_skip_message(wt: &Worktree, min_size: Size) -> String {
     let branch_label = wt.branch.as_deref().unwrap_or("detached");
     format!(
         "  Skipping small worktree '{}' (branch: {branch_label}): smaller than {min_size}.",
-        wt.path.display()
+        tilde_path(&wt.path)
     )
 }
 

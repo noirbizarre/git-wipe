@@ -1593,8 +1593,8 @@ mod tests {
         let git = Git::with_workdir(false, &work);
         let config = protected_main();
         let filter = filter_for(&git, &config)?;
-        let remote = find_merged_remote(&git, &filter, "origin", Effort::Quick, TEST_JOBS, None)?
-            .candidates;
+        let remote =
+            find_merged_remote(&git, &filter, "origin", Effort::Quick, TEST_JOBS, None)?.candidates;
         assert!(
             !remote.contains(&"feature/unpushed-ff".to_string()),
             "ancestor detection must compare against origin/main, got {remote:?}"

@@ -31,7 +31,7 @@ use crate::worktrees::{worktree_age, worktree_size};
 
 /// Emitted whenever a `gone` branch is reported: `status` never fetches, so the
 /// remote-tracking refs it reads are only as fresh as the last `git fetch`.
-const STALE_GONE_WARNING: &str =
+pub const STALE_GONE_WARNING: &str =
     "Remotes were not fetched; deleted-upstream detection may be stale.";
 
 /// What a [`Row`] describes.
@@ -189,8 +189,7 @@ pub fn scan(
     let mut unmerged: HashMap<&str, bool> = HashMap::new();
     for (probe, branch) in probes.into_iter().zip(&to_probe) {
         let value = probe.unwrap_or_else(|err| {
-            let message =
-                format!("Could not check whether '{branch}' has unmerged commits: {err}");
+            let message = format!("Could not check whether '{branch}' has unmerged commits: {err}");
             ui.warning(&message);
             warnings.push(message);
             true

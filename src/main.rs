@@ -192,7 +192,7 @@ fn handle_config_command(
             }
             match config::Config::try_load(git)? {
                 Some(cfg) => {
-                    ui.heading("Current configuration [wipe]:");
+                    ui.heading(&format!("Current configuration [{}]:", config::SECTION));
                     ui.blank();
 
                     ui.field(
@@ -610,10 +610,7 @@ fn resolve_worktrunk(git: &git::Git, ui: &ui::Ui, cli: &Cli, cfg: &config::Confi
         if cli.effective_yes() {
             return Ok(true);
         }
-        return ui.confirm(
-            "Worktrunk detected. Use it for worktree removal (triggers pre/post-remove hooks)?",
-            true,
-        );
+        return ui.confirm(config::WORKTRUNK_PROMPT, true);
     }
 
     Ok(false)
