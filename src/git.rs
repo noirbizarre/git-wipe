@@ -584,6 +584,26 @@ impl Git {
         Ok(parse_remote_branch_list(&out, remote))
     }
 
+    /// Return the URL of `remote`, with `url.<base>.insteadOf` rewrites applied.
+    pub fn remote_url(&self, remote: &str) -> Result<String> {
+        self.run(&["remote", "get-url", remote])
+    }
+
+    /// Return the tip commit SHA of every ref under `prefix`, keyed by the ref
+    /// name with `prefix` stripped.
+    ///
+    /// `refs/heads/` yields local branches (`feature/x`); `refs/remotes/origin/`
+    /// yields the remote-tracking branches of `origin` in short form. A
+    /// symbolic `HEAD` entry is skipped.
+    pub fn ref_tips(&self, prefix: &str) -> Result<HashMap<String, String>> {
+        let out = self.run(&[
+            "for-each-ref",
+            "--format=%(refname)%00%(objectname)",
+            prefix.trim_end_matches('/'),
+        ])?;
+        Ok(parse_ref_tips(&out, prefix))
+    }
+
     /// Use `git cherry` to detect rebase-merged branches.
     ///
     /// Returns `true` when every commit of `branch` has already been applied
@@ -1222,6 +1242,22 @@ fn parse_committer_dates(output: &str) -> HashMap<String, u64> {
                 return None;
             }
             Some((name.to_string(), date.trim().parse().ok()?))
+        })
+        .collect()
+}
+
+/// Parse `<refname>\0<sha>` lines into a map keyed by `refname` minus `prefix`.
+fn parse_ref_tips(output: &str, prefix: &str) -> HashMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (name, sha) = line.split_once('\0')?;
+            let name = name.trim().strip_prefix(prefix)?;
+            let sha = sha.trim();
+            if name.is_empty() || name == "HEAD" || sha.is_empty() {
+                return None;
+            }
+            Some((name.to_string(), sha.to_string()))
         })
         .collect()
 }
@@ -2985,5 +3021,40 @@ locked work in progress, do not remove
             parse_remote_branch_list(out, "origin"),
             vec!["main".to_string(), "feature/x".to_string()]
         );
+    }
+
+    #[test]
+    fn remote_url_applies_the_remote_configuration() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        crate::test_helpers::git_in(
+            dir.path(),
+            &["remote", "add", "origin", "git@github.com:o/r.git"],
+        )?;
+        assert_eq!(git.remote_url("origin")?, "git@github.com:o/r.git");
+        assert!(git.remote_url("nope").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn ref_tips_reads_local_and_remote_branch_tips() -> Result<()> {
+        let (_dir, work, _bare) = crate::test_helpers::init_repo_with_local_remote()?;
+        let git = Git::with_workdir(false, &work);
+
+        let local = git.ref_tips("refs/heads/")?;
+        assert_eq!(local["main"], git.run(&["rev-parse", "main"])?);
+
+        let remote = git.ref_tips("refs/remotes/origin/")?;
+        assert_eq!(remote["main"], git.run(&["rev-parse", "origin/main"])?);
+        assert!(!remote.contains_key("HEAD"), "{remote:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn parse_ref_tips_strips_the_prefix_and_skips_head() {
+        let out = "refs/remotes/origin/HEAD\0aaa\nrefs/remotes/origin/feature/x\0bbb\n\
+                   refs/remotes/other/y\0ccc\nrefs/remotes/origin/z\0\n";
+        let tips = parse_ref_tips(out, "refs/remotes/origin/");
+        assert_eq!(tips.len(), 1);
+        assert_eq!(tips["feature/x"], "bbb");
     }
 }

@@ -21,6 +21,7 @@ use anyhow::Result;
 
 use crate::branches::{Effort, Filter, find_gone_local, find_merged_local, resolve_merge_targets};
 use crate::duration::MinAge;
+use crate::forge::{ForgeSetting, ForgeSource};
 use crate::git::Git;
 use crate::parallel;
 use crate::report::{StatusEntry, StatusFlag, StatusKind, StatusReport, path_string};
@@ -51,6 +52,9 @@ pub enum RowKind {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Flags {
     pub merged: bool,
+    /// Merged, as reported by the forge. Implies `merged`, and is rendered in
+    /// its place.
+    pub pr_merged: bool,
     pub gone: bool,
     pub unmerged: bool,
     pub dirty: bool,
@@ -92,6 +96,8 @@ pub struct StatusOptions {
     pub show_size: bool,
     /// `--merged`: list only rows flagged as merged.
     pub merged_only: bool,
+    /// Whether the forge is asked about merged pull/merge requests first.
+    pub forge: ForgeSetting,
 }
 
 /// Everything the scan produced, ready to render or serialize.
@@ -104,7 +110,13 @@ pub struct Scan {
 /// Collect every row, sorted oldest first.
 ///
 /// Performs read-only git calls only: no fetch, no prompt, no mutation.
-pub fn scan(git: &Git, filter: &Filter, ui: &Ui, opts: StatusOptions) -> Result<Scan> {
+pub fn scan(
+    git: &Git,
+    filter: &Filter,
+    ui: &Ui,
+    opts: StatusOptions,
+    forge: Option<&dyn ForgeSource>,
+) -> Result<Scan> {
     let mut warnings = Vec::new();
 
     // `rev-parse --abbrev-ref HEAD` yields the literal "HEAD" when detached,
@@ -131,13 +143,14 @@ pub fn scan(git: &Git, filter: &Filter, ui: &Ui, opts: StatusOptions) -> Result<
     // The spinner clears its own line, so its warnings are surfaced after it
     // returns rather than printed from inside the closure.
     let merged = ui.spinner("Scanning local branches…", || {
-        find_merged_local(git, filter, opts.effort, opts.jobs)
+        find_merged_local(git, filter, opts.effort, opts.jobs, forge)
     })?;
     for warning in &merged.warnings {
         ui.warning(warning);
     }
     warnings.extend(merged.warnings.iter().cloned());
     let merged_set: HashSet<&str> = merged.candidates.iter().map(String::as_str).collect();
+    let pr_set: HashSet<&str> = merged.pr_merged.iter().map(String::as_str).collect();
 
     let gone = find_gone_local(git, filter, &merged.candidates)?;
     if !gone.is_empty() {
@@ -205,7 +218,14 @@ pub fn scan(git: &Git, filter: &Filter, ui: &Ui, opts: StatusOptions) -> Result<
             && !orphan
         {
             with_worktree.insert(branch.as_str());
-            set_merge_flags(&mut flags, branch, &merged_set, &gone_set, &unmerged);
+            set_merge_flags(
+                &mut flags,
+                branch,
+                &merged_set,
+                &pr_set,
+                &gone_set,
+                &unmerged,
+            );
         }
         rows.push(Row {
             kind: if orphan {
@@ -229,7 +249,14 @@ pub fn scan(git: &Git, filter: &Filter, ui: &Ui, opts: StatusOptions) -> Result<
             continue;
         }
         let mut flags = Flags::default();
-        set_merge_flags(&mut flags, branch, &merged_set, &gone_set, &unmerged);
+        set_merge_flags(
+            &mut flags,
+            branch,
+            &merged_set,
+            &pr_set,
+            &gone_set,
+            &unmerged,
+        );
         rows.push(Row {
             kind: RowKind::Branch,
             branch: Some(branch.clone()),
@@ -256,11 +283,13 @@ fn set_merge_flags(
     flags: &mut Flags,
     branch: &str,
     merged: &HashSet<&str>,
+    pr_merged: &HashSet<&str>,
     gone: &HashSet<&str>,
     unmerged: &HashMap<&str, bool>,
 ) {
     if merged.contains(branch) {
         flags.merged = true;
+        flags.pr_merged = pr_merged.contains(branch);
     } else {
         flags.unmerged = unmerged.get(branch).copied().unwrap_or(false);
     }
@@ -316,7 +345,8 @@ pub fn status_tokens(flags: Flags) -> Vec<&'static str> {
     for (set, token) in [
         (flags.orphan, "orphan"),
         (flags.locked, "locked"),
-        (flags.merged, "merged"),
+        (flags.merged && !flags.pr_merged, "merged"),
+        (flags.pr_merged, "pr-merged"),
         (flags.gone, "gone"),
         (flags.unmerged, "unmerged"),
         (flags.dirty, "dirty"),
@@ -333,7 +363,7 @@ pub fn status_tokens(flags: Flags) -> Vec<&'static str> {
 fn style_token(token: &str) -> String {
     let styled = console::style(token);
     match token {
-        "merged" => styled.green(),
+        "merged" | "pr-merged" => styled.green(),
         "gone" => styled.yellow(),
         "dirty" => styled.red(),
         "unmerged" => styled.cyan(),
@@ -481,6 +511,7 @@ pub fn to_report(rows: &[Row], warnings: Vec<String>) -> StatusReport {
                     "orphan" => StatusFlag::Orphan,
                     "locked" => StatusFlag::Locked,
                     "merged" => StatusFlag::Merged,
+                    "pr-merged" => StatusFlag::PrMerged,
                     "gone" => StatusFlag::Gone,
                     "unmerged" => StatusFlag::Unmerged,
                     "dirty" => StatusFlag::Dirty,
@@ -510,6 +541,7 @@ mod tests {
             min_size: Size::default(),
             show_size: false,
             merged_only: false,
+            forge: ForgeSetting::Off,
         }
     }
 
@@ -579,7 +611,14 @@ mod tests {
         let unmerged: HashMap<&str, bool> = [("done", true)].into_iter().collect();
 
         let mut flags = Flags::default();
-        set_merge_flags(&mut flags, "done", &merged, &gone, &unmerged);
+        set_merge_flags(
+            &mut flags,
+            "done",
+            &merged,
+            &HashSet::new(),
+            &gone,
+            &unmerged,
+        );
         assert!(flags.merged);
         assert!(!flags.unmerged);
     }
@@ -589,8 +628,31 @@ mod tests {
         let merged: HashSet<&str> = ["done"].into_iter().collect();
         let gone: HashSet<&str> = ["done"].into_iter().collect();
         let mut flags = Flags::default();
-        set_merge_flags(&mut flags, "done", &merged, &gone, &HashMap::new());
+        set_merge_flags(
+            &mut flags,
+            "done",
+            &merged,
+            &HashSet::new(),
+            &gone,
+            &HashMap::new(),
+        );
         assert_eq!(status_tokens(flags), ["merged", "gone"]);
+    }
+
+    #[test]
+    fn a_forge_merged_branch_shows_pr_merged_in_place_of_merged() {
+        let merged: HashSet<&str> = ["done"].into_iter().collect();
+        let mut flags = Flags::default();
+        set_merge_flags(
+            &mut flags,
+            "done",
+            &merged,
+            &merged,
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        assert!(flags.merged && flags.pr_merged);
+        assert_eq!(status_tokens(flags), ["pr-merged"]);
     }
 
     // ── Age formatting ───────────────────────────────────────────────
@@ -790,7 +852,7 @@ mod tests {
 
     fn scan_repo(git: &Git) -> Result<Scan> {
         let filter = Filter::load(git, &Config::default())?;
-        scan(git, &filter, &Ui::quiet(), opts())
+        scan(git, &filter, &Ui::quiet(), opts(), None)
     }
 
     #[test]
@@ -909,7 +971,7 @@ mod tests {
         // Reload so the filter picks up the pattern just written.
         let cfg = Config::try_load(&git)?.expect("wipe.ignore makes the repo configured");
         let filter = Filter::load(&git, &cfg)?;
-        let scan = scan(&git, &filter, &Ui::quiet(), opts())?;
+        let scan = scan(&git, &filter, &Ui::quiet(), opts(), None)?;
         assert!(!names(&scan.rows).contains(&ignored.as_str()));
         Ok(())
     }
@@ -938,7 +1000,7 @@ mod tests {
     fn scan_skips_sizing_unless_requested() -> Result<()> {
         let (_dir, git, _wt_path) = test_helpers::init_repo_with_worktree()?;
         let filter = Filter::load(&git, &Config::default())?;
-        let scan = scan(&git, &filter, &Ui::quiet(), opts())?;
+        let scan = scan(&git, &filter, &Ui::quiet(), opts(), None)?;
         assert!(
             scan.rows.iter().all(|r| r.size.is_none()),
             "sizing must be skipped by default: {:?}",
@@ -955,7 +1017,7 @@ mod tests {
             show_size: true,
             ..opts()
         };
-        let scan = scan(&git, &filter, &Ui::quiet(), opts)?;
+        let scan = scan(&git, &filter, &Ui::quiet(), opts, None)?;
         let wt_row = scan
             .rows
             .iter()
