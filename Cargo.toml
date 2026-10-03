@@ -1,9 +1,21 @@
+# git-wipe — Wipe out merged local branches and worktrees
+#
+# Single crate, `[lib]` + `[[bin]]`. The library holds the engine; the binary is
+# a thin CLI over it, so integration tests can exercise either.
+
 [package]
 name = "git-wipe"
 version = "0.5.0"
 edition = "2024"
+# The MSRV. Checked by the MSRV job in ci.yaml, which greps this very line — keep it
+# a plain literal. `rust-toolchain.toml` separately pins the channel to develop
+# against; the two answer different questions.
+rust-version = "1.88"
 license = "MIT"
-authors = ["Axel H. <noirbizarre@gmail.com>"]
+# No `authors`: Cargo/crates.io stopped generating and reading it after the
+# 2021 edition — ownership on crates.io comes from the registry account that
+# published, not this field. `author` still feeds LICENSE and, when `aur` is
+# on, the PKGBUILD's `# Maintainer:` line.
 description = "Wipe out merged local branches and worktrees"
 repository = "https://github.com/noirbizarre/git-wipe"
 readme = "README.md"
@@ -11,9 +23,77 @@ keywords = ["git", "branches", "worktree", "cleanup", "merged"]
 categories = ["command-line-utilities", "development-tools"]
 build = "build.rs"
 
+# cargo-binstall otherwise derives an asset name from the target triple, and
+# the publish workflow's assets carry short platform suffixes instead (the
+# `asset` field of each entry in `data/targets.toml`). A wrong guess is not an
+# error: binstall silently falls back to compiling from source, which is the
+# slow path this exists to avoid. So every target the publish workflow builds
+# is mapped by hand, from that same catalogue — one override per selected
+# target, so this list never drifts from the publish matrix.
+#
+# `pkg-fmt = "bin"`: the publish workflow uploads the raw executable, not an
+# archive — see publish-release.yaml's "Stage the asset" step.
+[package.metadata.binstall]
+pkg-fmt = "bin"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_linux-amd64"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_linux-arm64"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_linux-amd64-musl"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-musl]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_linux-arm64-musl"
+
+[package.metadata.binstall.overrides.x86_64-apple-darwin]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_darwin-amd64"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_darwin-arm64"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_windows-amd64.exe"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_windows-arm64.exe"
+
+[package.metadata.binstall.overrides.x86_64-unknown-freebsd]
+pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_freebsd-amd64"
+
+
+
+
 [[bin]]
 name = "git-wipe"
 path = "src/main.rs"
+
+[lib]
+name = "git_wipe"
+path = "src/lib.rs"
+
+[profile.release]
+# Release binaries are cross-compiled once per tag and downloaded many times, so
+# the build cost is paid once and the size saving is paid forward.
+#
+# Cargo only reads [profile.*] from a workspace's root manifest, so this stays
+# unconditional: member crates inherit it whether or not this file also
+# defines a [package].
+lto = true
+codegen-units = 1
+strip = true
+
+# --- project-specific --------------------------------------------------------
+#
+# Everything above this line is owned by the template and will keep updating.
+# Everything below is yours.
+#
+# The template seeds what follows once, at `git tpl init`, and then leaves it
+# alone: Dependabot bumps versions here weekly, and a template that propagated
+# its own would open a conflict against every one of those PRs. Resolve in
+# favour of the project if `git tpl update` ever touches it.
 
 [dependencies]
 anyhow = "1"
@@ -24,6 +104,11 @@ globset = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+# Errors & diagnostics for the template's `src/lib.rs` / `src/error.rs`
+# scaffold: `thiserror` for the typed error, `miette` to render it.
+thiserror = "2"
+miette = { version = "7", features = ["fancy"] }
 
 [build-dependencies]
 # `build.rs` compiles `src/cli.rs` (and the modules it uses) out of tree to

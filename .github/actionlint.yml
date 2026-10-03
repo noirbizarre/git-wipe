@@ -1,29 +1,29 @@
 # actionlint configuration.
 # Docs: https://github.com/rhysd/actionlint/blob/main/docs/config.md
 #
-# Kept here rather than as `-ignore` flags so that every entry point —
-# `mise run lint:actions`, the prek hook, and anyone running `actionlint` by
-# hand — applies the same rules.
+# Every entry here suppresses a rule actionlint gets wrong, not a rule we
+# disagree with. Each says which version was current when it was added, so a
+# later upgrade can retire it. Nothing else is silenced: an unexpected key we
+# did not anticipate is still an error.
 
 # Declaring the variables makes `vars.*` checked strictly, so a typo in a
-# variable name is an error rather than an empty string at runtime.
+# variable name (e.g. `vars.APP_CLENT_ID`) is an error here rather than an
+# empty string at runtime, deep inside a release.
 config-variables:
   - APP_CLIENT_ID
 
 paths:
   .github/workflows/**/*.{yml,yaml}:
-    # Each of these is a case where actionlint's bundled knowledge is behind
-    # the platform, not a workflow of ours that needs fixing.
     ignore:
-      # `environment.deployment` is a real key. It takes a job out of the
-      # repository's deployment history while still granting the environment's
-      # secrets, which is what the prepare and ship workflows want — only
-      # publishing is a deployment.
-      # https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/control-deployments
-      - 'unexpected key "deployment" for "environment" section'
-      # `actions/create-github-app-token` v3 deprecated `app-id` in favour of
-      # `client-id`. actionlint still ships the pre-v3 input list, so it
-      # reports the recommended spelling as unknown and the deprecated one as
-      # missing. Drop both once actionlint refreshes its metadata.
-      - 'input "client-id" is not defined in action "actions/create-github-app-token'
+      # actionlint 1.7.12 bundles metadata for
+      # `actions/create-github-app-token` that predates `client-id`: it demands
+      # the legacy numeric `app-id` and rejects the input the action itself now
+      # recommends. Both halves of that one mistake, scoped to this action so a
+      # genuinely missing input elsewhere still fails.
       - 'missing input "app-id" which is required by action "actions/create-github-app-token'
+      - 'input "client-id" is not defined in action "actions/create-github-app-token'
+      # actionlint 1.7.12 does not know `environment.deployment`, a documented
+      # and supported key that opts a job out of the deployment history
+      # (https://docs.github.com/en/actions/how-tos/manage-workflow-runs/control-deployments).
+      # `ship.yaml` and `prepare-release.yaml` both use it.
+      - 'unexpected key "deployment" for "environment" section'

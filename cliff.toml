@@ -1,23 +1,15 @@
 # git-cliff configuration.
 #
-# gh-ship orchestrates the release but never generates changelogs — that is
-# this project's own choice of tool, invoked by
-# .github/workflows/prepare-release.yml. It also powers
-# `git cliff --bumped-version`, which is how the prepare workflow derives the
-# next version from unreleased commits.
-#
-# Kept deliberately close to gh-ship's own configuration, so that the
-# changelogs of these projects read the same way. The one deliberate
-# divergence is `tag_pattern`: this project tags with a `v` prefix.
+# Two jobs, and the second is the one that matters: it renders CHANGELOG.md,
+# and `git cliff --bumped-version` is how .github/workflows/prepare-release.yaml
+# derives the next version from the unreleased commits. gh-ship never parses a
+# version or derives a tag — this file is the whole versioning policy.
 
 [remote.github]
 owner = "noirbizarre"
 repo = "git-wipe"
 
 [changelog]
-# The rename notice lives here rather than being hand-written into
-# CHANGELOG.md: git-cliff regenerates that file on every release and would
-# drop anything not in this header.
 header = """
 # Changelog
 
@@ -70,10 +62,33 @@ body = """
     {% endfor -%}
 {% endfor -%}
 {%- if github -%}
-{% if github.contributors | filter(attribute="is_first_time", value=true) | length != 0 %}
+{#- `github.contributors` comes from the GitHub API, not from the filtered
+    commit list: skipping a commit with a `commit_parsers` rule does NOT remove
+    its author from here. Without this, every bot that ever opened a merged PR
+    — dependabot, and the release bot once `chore(release):` lands on main —
+    gets credited as a first-time contributor.
+
+    Tera's `filter` only does attribute equality, so collect in two passes.
+    Note `ending_with` takes a positional argument; the keyword form is a
+    template parse error.
+
+    `contributor.username` is `null` (not just absent — `is defined` won't
+    catch it) when GitHub can't resolve a GitHub account for the commit's
+    author email, which happens for commits pushed with an unlinked email.
+    Guard with `is string` first: Tera's `and` short-circuits, so this skips
+    `ending_with` instead of erroring on a non-string value. Contributors we
+    can't attribute to a handle are dropped from this list too, since there
+    is no `@handle` to credit them with. -#}
+{% set_global newcomers = [] -%}
+{% for contributor in github.contributors | filter(attribute="is_first_time", value=true) -%}
+{% if contributor.username is string and not contributor.username is ending_with("[bot]") -%}
+{% set_global newcomers = newcomers | concat(with=contributor) -%}
+{% endif -%}
+{% endfor -%}
+{% if newcomers | length != 0 %}
   ## ❤️ New Contributors
 {% endif %}\
-{% for contributor in github.contributors | filter(attribute="is_first_time", value=true) %}
+{% for contributor in newcomers %}
   * @{{ contributor.username }} made their first contribution
     {%- if contributor.pr_number %} in \
       [#{{ contributor.pr_number }}]({{ self::remote_url() }}/pull/{{ contributor.pr_number }}) \
@@ -84,16 +99,9 @@ body = """
 trim = true
 footer = ""
 postprocessors = [
-  # Each release body is rendered and post-processed separately, then
-  # concatenated, so this normalises every section to end in exactly one
-  # newline. Combined with the leading newline in the body above, that gives a
-  # blank line between releases and exactly one newline at end of file — which
-  # is what prek's end-of-file-fixer wants.
   { pattern = '\n+\z', replace = "\n" },
-  # Resolve the placeholder left by the issue-linking preprocessor below.
   { pattern = "<REPO>", replace = "https://github.com/noirbizarre/git-wipe" },
 ]
-
 
 [git]
 conventional_commits = true
@@ -103,26 +111,20 @@ protect_breaking_commits = false
 filter_commits = false
 topo_order = false
 sort_commits = "newest"
+# No `v` prefix: the tag and the version are the same string. They still travel
+# as two fields in the release artifact, because the tag convention is a
+# project's own choice and gh-ship never derives one from the other.
+#
 # Anchored deliberately. A bare `[0-9]*` is a regex that also matches the empty
 # string, so it matches every tag in the repository, not just versions.
-# This project tags with a `v` prefix (`v0.1.0`), unlike gh-ship.
-tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+"
+tag_pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+"
 
 commit_preprocessors = [
-  # Turn `(#123)` into a link, via the placeholder resolved in postprocessors.
   { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}](<REPO>/issues/${2}))" },
-  # Fix typos in commit messages, which cannot be amended once pushed.
-  # https://github.com/crate-ci/typos
   { pattern = ".*", replace_command = "typos --write-changes -" },
-  # Neutralise HTML comment delimiters. These notes end up inside the
-  # `<!-- ship:artifact ... -->` block gh-ship embeds in the Release PR body,
-  # and HTML comments cannot nest: a `-->` reaching them closes the block
-  # early. gh-ship escapes the payload too, but a subject that cannot produce
-  # a delimiter in the first place is the cheaper guarantee, and the entities
-  # render as the original literal text.
-  #
-  # This belongs in the *pre*processors: postprocessors run on rendered output
-  # and would mangle the `<!-- 0 -->` group-ordering markers in the template.
+  # gh-ship embeds the release artifact in the Release PR body as an HTML
+  # comment. A commit subject containing a literal `-->` would close that
+  # comment early and spill JSON into the rendered description.
   { pattern = '<!--', replace = "&lt;!--" },
   { pattern = '-->', replace = "--&gt;" },
 ]
@@ -137,6 +139,9 @@ commit_parsers = [
   { message = "^style", group = "<!-- 6 -->🎨 Style" },
   { message = "^build", group = "<!-- 7 -->🏗️ Build" },
   { message = "^ci", group = "<!-- 8 -->🔧 CI" },
+  # Load-bearing. The release commit is itself a conventional commit on main,
+  # so without this skip every release would find one releasable commit — its
+  # own predecessor — and bump forever.
   { message = "^chore\\(release\\):", skip = true },
   # release-plz wrote `chore: release v0.1.1` without a scope. Kept so a full
   # regeneration of CHANGELOG.md does not resurrect it.
@@ -151,10 +156,9 @@ commit_parsers = [
 ]
 
 [bump]
-# The `v` prefix is this project's convention; git-cliff carries it through to
-# `--bumped-version`, so the prepare workflow strips it for the crate version.
-initial_tag = "v0.1.0"
+initial_tag = "0.1.0"
 features_always_bump_minor = true
-# Stay in 0.x until the CLI surface is settled: a breaking change bumps the
-# minor, not the major.
+# Below 1.0, a breaking change bumps the minor version. SemVer allows it, and
+# `0.x` already tells users the surface is unstable. Flip this to `true` on the
+# way to 1.0.
 breaking_always_bump_major = false

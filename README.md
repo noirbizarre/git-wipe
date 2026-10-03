@@ -5,12 +5,24 @@
 <p align="center"><strong>Wipe out merged local branches and worktrees</strong></p>
 
 <p align="center">
-  <a href="https://github.com/noirbizarre/git-wipe/actions/workflows/ci.yml" title="CI"><img src="https://github.com/noirbizarre/git-wipe/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://codecov.io/gh/noirbizarre/git-wipe" title="Codecov"><img src="https://codecov.io/gh/noirbizarre/git-wipe/graph/badge.svg" alt="Codecov"></a>
-  <a href="https://crates.io/crates/git-wipe" title="crates.io"><img src="https://img.shields.io/crates/v/git-wipe" alt="crates.io"></a>
-  <a href="https://github.com/noirbizarre/git-wipe/releases/latest" title="Release"><img src="https://img.shields.io/github/v/release/noirbizarre/git-wipe" alt="Release"></a>
-  <a href="https://aur.archlinux.org/packages/git-wipe-bin" title="AUR"><img src="https://img.shields.io/aur/version/git-wipe-bin" alt="AUR"></a>
-  <a href="https://github.com/noirbizarre/git-wipe/blob/main/LICENSE" title="License"><img src="https://img.shields.io/github/license/noirbizarre/git-wipe" alt="License"></a>
+  <a href="https://github.com/noirbizarre/git-wipe/actions/workflows/ci.yaml" title="CI">
+    <img src="https://github.com/noirbizarre/git-wipe/actions/workflows/ci.yaml/badge.svg" alt="CI">
+  </a>
+  <a href="https://codecov.io/gh/noirbizarre/git-wipe" title="Codecov">
+    <img src="https://codecov.io/gh/noirbizarre/git-wipe/graph/badge.svg" alt="Codecov">
+  </a>
+  <a href="https://crates.io/crates/git-wipe" title="crates.io">
+    <img src="https://img.shields.io/crates/v/git-wipe" alt="crates.io">
+  </a>
+  <a href="https://github.com/noirbizarre/git-wipe/releases/latest" title="Release">
+    <img src="https://img.shields.io/github/v/release/noirbizarre/git-wipe" alt="Release">
+  </a>
+  <a href="https://aur.archlinux.org/packages/git-wipe-bin" title="AUR">
+    <img src="https://img.shields.io/aur/version/git-wipe-bin" alt="AUR">
+  </a>
+  <a href="https://github.com/noirbizarre/git-wipe/blob/main/LICENSE" title="License">
+    <img src="https://img.shields.io/github/license/noirbizarre/git-wipe" alt="License">
+  </a>
 </p>
 
 ---
@@ -34,9 +46,12 @@ configured remotes. It also handles orphaned worktree cleanup.
 - Glob pattern support for protected branches (e.g. `release/*`)
 - Per-branch protection via git config (`branch.<name>.wipe-protected`)
 - Ignore branch patterns entirely (`wipe.ignore`) -- never fetched, never analysed
-- Multiple merge detection strategies (fast merge, rebase-aware via `git cherry`, tree SHA comparison, empty three-dot diff, patch-ID matching, simulated merge, squash-merge detection, and deleted-upstream detection)
+- Multiple merge detection strategies (fast merge, rebase-aware via `git cherry`, tree SHA comparison, empty
+  three-dot diff, patch-ID matching, simulated merge, squash-merge detection, and deleted-upstream detection)
 - Tunable detection thoroughness with `--effort <1-3>` (speed vs accuracy)
-- Optional, opt-in forge lookup (`--forge`): GitHub, GitLab, Gitea and Forgejo are asked whether a branch's pull/merge request was merged, which is the only exact answer for squash and rebase merges -- networked, never on by default, and never fatal
+- Optional, opt-in forge lookup (`--forge`): GitHub, GitLab, Gitea and Forgejo are asked whether a branch's
+  pull/merge request was merged, which is the only exact answer for squash and rebase merges -- networked, never on
+  by default, and never fatal
 - Parallel analysis (`--jobs`, defaults to the CPU count) with byte-identical results at any job count
 - Automatic fast-forward of target branches before detection (with `--no-pull` to skip)
 - Optional [worktrunk](https://worktrunk.dev) integration for worktree removal (triggers pre/post-remove hooks)
@@ -94,11 +109,12 @@ completions in one go:
 mise run setup
 ```
 
-Prebuilt release archives ship them under `man/` and `completions/`. Install by
-hand with:
+Prebuilt release archives (`git-wipe_<version>_<platform>.tar.gz`) ship them under
+`share/man/man1/` and `share/*-completion*`, laid out as a prefix. Install by hand
+with:
 
 ```sh
-cp man/*.1 ~/.local/share/man/man1/
+cp share/man/man1/*.1 ~/.local/share/man/man1/
 ```
 
 Make sure that directory is on your `MANPATH` (most distributions add
@@ -541,7 +557,10 @@ setup wizard runs automatically:
 3. Asks for branch patterns to ignore entirely (e.g. `wip/*`)
 4. Lists available remotes and asks which ones to operate on
 5. If [worktrunk](https://worktrunk.dev) (`wt`) is detected on `$PATH`, asks whether to use it for worktree removal
-6. If a remote points at a known forge (GitHub, GitLab, Gitea or Forgejo, recognised from its URL alone, with no network access), asks whether to enable [forge detection](#forge-detection). With remotes on different forges, the question names each remote and its forge. Declining, or having no recognisable forge, keeps the offline behaviour; `git wipe config setup` reruns the wizard at any time
+6. If a remote points at a known forge (GitHub, GitLab, Gitea or Forgejo, recognised from its URL alone, with no
+   network access), asks whether to enable [forge detection](#forge-detection). With remotes on different forges,
+   the question names each remote and its forge. Declining, or having no recognisable forge, keeps the offline
+   behaviour; `git wipe config setup` reruns the wizard at any time
 
 When re-run on an already configured repository, every step is pre-filled from
 the current settings (protected branches and patterns, ignored patterns,
@@ -553,6 +572,7 @@ configuration. Settings the wizard does not ask about (`effort`, `minage`,
 
 The cleanup runs in four sequential phases, each of which can be skipped via
 CLI flags:
+
 1. **Fetch & prune remotes** -- runs `git fetch --prune <remote>` for each
    configured remote (every remote when `wipe.remote` is unset), pruning
    deleted remote-tracking branches. Skipped with `--no-fetch`.
@@ -836,7 +856,7 @@ the lifecycle:
 1. push to `main` → `gh ship prepare` opens or updates the **Release PR** on
    the `release/next` branch, carrying the `Cargo.toml` bump and the changelog;
 2. review the changelog and merge that PR;
-3. `gh ship release` tags the merge commit as `vX.Y.Z`, drafts the release,
+3. `gh ship release` tags the merge commit as `X.Y.Z`, drafts the release,
    attaches the cross-compiled binaries, publishes the crate to crates.io, and
    only then makes the release public.
 

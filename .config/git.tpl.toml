@@ -1,0 +1,41 @@
+# git-tpl — https://noirbizarre.github.io/git-tpl/configuration/
+#
+# This file is versioned with the project. Edit an answer and run
+# `git tpl update` to re-render the template with it.
+
+[template]
+source = "git@github.com:noirbizarre/rust.tpl.git"
+
+[answers]
+archive = true
+aur = true
+author = "Axel H. <noirbizarre@gmail.com>"
+bin_name = "git-wipe"
+categories = "command-line-utilities,development-tools"
+copyright_holder = "Axel H."
+copyright_year = 2026
+crate = "git-wipe"
+description = "Wipe out merged local branches and worktrees"
+docs = false
+docs_accent = "indigo"
+homebrew = true
+homebrew_tap = "noirbizarre/homebrew-tap"
+keywords = "git,branches,worktree,cleanup,merged"
+man_pages = true
+msrv = true
+msrv_version = "1.88"
+owner = "noirbizarre"
+publish = true
+service = false
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-unknown-freebsd",
+]
+workspace = false

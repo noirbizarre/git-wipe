@@ -7,10 +7,10 @@ resolve.
 
 | Path | Channel | Workflow |
 | --- | --- | --- |
-| `aur/git-wipe/` | AUR, built from the release source tarball | `.github/workflows/aur.yml` |
-| `aur/git-wipe-bin/` | AUR, prebuilt binary (x86_64, aarch64) | `.github/workflows/aur.yml` |
-| `aur/git-wipe-git/` | AUR, tracks `main` | `.github/workflows/aur.yml` |
-| `homebrew/git-wipe.rb` | `noirbizarre/homebrew-tap` | `.github/workflows/homebrew.yml` |
+| `aur/git-wipe/` | AUR, built from the release source tarball | `.github/workflows/aur.yaml` |
+| `aur/git-wipe-bin/` | AUR, prebuilt binary (x86_64, aarch64) | `.github/workflows/aur.yaml` |
+| `aur/git-wipe-git/` | AUR, tracks `main` | `.github/workflows/aur.yaml` |
+| `homebrew/git-wipe.rb` | `noirbizarre/homebrew-tap` | `.github/workflows/homebrew.yaml` |
 
 ## The placeholder contract
 
@@ -19,10 +19,10 @@ The templates are not valid as they stand: the workflows substitute
 
 | Placeholder | Filled from |
 | --- | --- |
-| `@VERSION@` | the tag with its `v` stripped |
+| `@VERSION@` | the tag, which is the version (no `v` prefix) |
 | `@SHA256@` | `git-wipe-<version>.tar.gz` |
-| `@SHA256_X86_64@`, `@SHA256_AARCH64@` | `git-wipe-<arch>-unknown-linux-gnu.tar.gz` |
-| `@SHA256_DARWIN_*@`, `@SHA256_LINUX_*@` | `git-wipe-<target>.tar.gz` (macOS, Linux musl) |
+| `@SHA256_X86_64@`, `@SHA256_AARCH64@` | `git-wipe_<version>_linux-<amd64\|arm64>.tar.gz` |
+| `@SHA256_DARWIN_*@`, `@SHA256_LINUX_*@` | `git-wipe_<version>_<platform>.tar.gz` (macOS, Linux musl) |
 
 Checksums are always computed from the downloaded asset itself, never read from
 the `.sha256` files published beside it: a mismatch between the two must not be
@@ -33,17 +33,19 @@ from the checkout, and its source is a git URL, so there is nothing to pin.
 
 Nothing else in these templates may hardcode a version: adding an asset means
 adding both a placeholder and the substitution that fills it, and
-`homebrew.yml` fails if any placeholder survives rendering.
+`homebrew.yaml` fails if any placeholder survives rendering.
 
 ## Renaming or removing a release asset
 
-The templates address assets by name, so `publish-release.yml` and these files
+The templates address assets by name, so `publish-release.yaml` and these files
 change together:
 
-- `git-wipe-<target>.tar.gz` comes from `taiki-e/upload-rust-binary-action`
-  (`archive: $bin-$target` by default) and carries **no leading directory** —
-  `git-wipe`, `man/`, `completions/`, `LICENSE` and `README.md` sit at its root.
-  `git-wipe-bin` and the formula both rely on that layout.
+- `git-wipe_<version>_<platform>.tar.gz` comes from the template's "Package the
+  Unix binaries" step (the `archive` answer) and has a single leading
+  `git-wipe-<version>-<platform>/` directory laid out as a prefix: `bin/`,
+  `share/doc/git-wipe/`, `share/man/man1/` and the completions. The formula
+  and `git-wipe-bin` rely on that layout. The raw binaries are published beside
+  it for `cargo binstall`.
 - `git-wipe-<version>.tar.gz` is produced by the `source` job, with a
   `git-wipe-<version>/` prefix so a PKGBUILD can `cd "$pkgname-$pkgver"`.
 
@@ -82,13 +84,13 @@ Both workflows are idempotent — they compare the staged index and exit early
 when nothing changed — so a failed leg can simply be replayed:
 
 ```sh
-gh workflow run aur.yml -f tag=vX.Y.Z
-gh workflow run homebrew.yml -f tag=vX.Y.Z
+gh workflow run aur.yaml -f tag=X.Y.Z
+gh workflow run homebrew.yaml -f tag=X.Y.Z
 ```
 
 ## Testing a change
 
-`aur.yml` builds every non-VCS package before pushing it, so a broken PKGBUILD
+`aur.yaml` builds every non-VCS package before pushing it, so a broken PKGBUILD
 fails the workflow rather than reaching users. To check one locally, substitute
 the placeholders against an already published release and run:
 

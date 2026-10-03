@@ -1,7 +1,7 @@
 # Maintainer: Axel Haustant <noirbizarre@gmail.com>
 #
 # Source package. `@VERSION@` and `@SHA256@` are substituted by
-# .github/workflows/aur.yml from the published release assets.
+# .github/workflows/aur.yaml from the published release assets.
 
 pkgname=git-wipe
 pkgver=@VERSION@
@@ -19,9 +19,8 @@ makedepends=('cargo')
 provides=('git-synchronizer')
 conflicts=('git-synchronizer')
 replaces=('git-synchronizer')
-# The project tags with a `v` prefix while `pkgver` is the bare version, hence
-# the `v$pkgver` in the URL against `$pkgname-$pkgver.tar.gz` as the file name.
-source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/$pkgname-$pkgver.tar.gz")
+# The project tags without a `v` prefix, so the tag in the URL is `$pkgver`.
+source=("$pkgname-$pkgver.tar.gz::$url/releases/download/$pkgver/$pkgname-$pkgver.tar.gz")
 sha256sums=('@SHA256@')
 
 prepare() {

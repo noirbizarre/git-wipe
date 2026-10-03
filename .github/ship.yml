@@ -5,7 +5,7 @@
 # gh-ship orchestrates the release; the version bump and the changelog are
 # produced by the `prepare-release` workflow using git-cliff. If this file or
 # the workflows it names stop satisfying the contract, `gh ship validate` fails
-# in CI.
+# in CI — on a pull request, rather than mid-release.
 
 version: 1
 
@@ -16,7 +16,16 @@ workflows:
   publish: publish-release
 
 pull_request:
-  title: "Release {{ version }}"
+  # The Release PR is squash-merged, and GitHub composes the squash commit from
+  # this title. This repository lints its own commit messages with
+  # commitlint/config-conventional, so the title has to be a Conventional
+  # Commit — `Release 0.3.0` is a subject our own hooks reject. `cliff.toml`
+  # skips `^chore\(release\):`, so it never reappears in the next changelog.
+  #
+  # Requires, in the repository settings:
+  #   squash_merge_commit_title:   PR_TITLE
+  #   squash_merge_commit_message: BLANK
+  title: "chore(release): {{ version }}"
   header: |
     This PR prepares the next release of git-wipe.
 
@@ -26,9 +35,7 @@ pull_request:
     ---
     Generated automatically by [gh-ship](https://github.com/noirbizarre/gh-ship).
   labels: [release]
+  reuse: true
 
 release:
-  # Draft first, so the publish workflow can attach the binaries and publish the
-  # crate before anyone watching the repository is notified. A release
-  # announced before its binaries exist is a release nobody can install.
   draft: true
