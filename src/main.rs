@@ -137,8 +137,13 @@ fn is_cancelled(err: &anyhow::Error) -> bool {
 ///
 /// When the root cause is a [`GitCommandError`] classified as a network or
 /// auth failure, the headline gets a matching prefix so users can tell at a
-/// glance "this is my network, not a bug". The classification itself lives in
-/// [`ui::Ui::report_failure`] so every failure path agrees on it.
+/// glance "this is my network, not a bug". The classification itself is the
+/// [`GitErrorKind`] computed once when the command fails, which
+/// [`ui::Ui::report_failure`] reads too, so every failure path agrees on *what*
+/// went wrong. The wording differs on purpose: `report_failure` words a
+/// per-item failure ("cannot delete 'x'"), whereas this renders a fatal error
+/// that has no target, and forge errors ([`forge::ForgeError`]) read as the
+/// tail of a warning sentence, hence their lower case.
 fn report_error(ui: &ui::Ui, err: &anyhow::Error) {
     let headline = match err.downcast_ref::<GitCommandError>().map(|gerr| gerr.kind) {
         Some(GitErrorKind::Network) => {
