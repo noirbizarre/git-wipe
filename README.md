@@ -401,7 +401,7 @@ to the repository-local `.git/config`:
 | `minage` | duration | Minimum age a worktree must have before it may be removed, e.g. `30s`, `2h`, `7d`. Defaults to `0s` (no guard); `--min-age` overrides it |
 | `minsize` | size | Minimum on-disk size a worktree must have before it may be removed, e.g. `512B`, `100K`, `100M`, `2G`. Defaults to `0B` (no guard); `--min-size` overrides it |
 | `jobs` | integer >= 1 | How many read-only git probes analysis may run at once. Defaults to the CPU count; `--jobs` overrides it, `--verbose` forces `1` |
-| `forge` | `true`, `false` or a forge name | Ask the forge about merged pull/merge requests before trying git (see [Forge detection](#forge-detection)). `true` identifies the forge from each remote URL; `github`, `gitlab`, `gitea` or `forgejo` forces a kind for self-hosted instances whose host name does not give it away. Off when omitted; `--forge` enables it and `--no-forge` disables it |
+| `forge` | `true`, `false` or a forge name | Ask the forge about merged pull/merge requests before trying git (see [Forge detection](#forge-detection)). `true` (also `on`, `yes`, `1`, `auto`) identifies the forge from each remote URL; `false` (also `off`, `no`, `0`) disables it; `github`, `gitlab`, `gitea`, `forgejo` (or its alias `codeberg`) forces a kind for self-hosted instances whose host name does not give it away. Off when omitted; `--forge` enables it and `--no-forge` disables it |
 
 When `worktrunk` is unset, git-wipe enables it only if the repository has a
 `[worktrunk]` config section **and** `wt` is on `$PATH`; it then asks once per
@@ -501,7 +501,7 @@ or written to git config.
 
 | Forge | Variables | Without a token |
 | --- | --- | --- |
-| GitHub | `GITHUB_TOKEN`, `GH_TOKEN` (`GH_ENTERPRISE_TOKEN` for Enterprise Server) | Not possible: the GraphQL API requires one |
+| GitHub | `GITHUB_TOKEN`, `GH_TOKEN` (`GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` for Enterprise Server) | Not possible: the GraphQL API requires one |
 | GitLab | `GITLAB_TOKEN`, `GL_TOKEN` | Public projects only |
 | Gitea, Forgejo | `GITEA_TOKEN`, `FORGEJO_TOKEN` | Public repositories only |
 

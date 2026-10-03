@@ -155,7 +155,7 @@ pub struct Cli {
     ///
     /// This sends branch names to the forge. Tokens come from the environment,
     /// never from git config: GITHUB_TOKEN or GH_TOKEN (GH_ENTERPRISE_TOKEN
-    /// for Enterprise Server), GITLAB_TOKEN or GL_TOKEN, GITEA_TOKEN or
+    /// or GITHUB_ENTERPRISE_TOKEN for Enterprise Server), GITLAB_TOKEN or GL_TOKEN, GITEA_TOKEN or
     /// FORGEJO_TOKEN. GitHub requires one; the others also work anonymously on
     /// public projects.
     ///
