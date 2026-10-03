@@ -377,8 +377,8 @@ fn style_token(token: &str) -> String {
 
 /// Render an age as its largest whole unit: `45s`, `1h`, `3d`, `2w`.
 ///
-/// [`MinAge`]'s own `Display` only renders exact multiples, so a 90-minute age
-/// would print as `5400s` — precise, and unreadable in a column.
+/// [`MinAge`]'s own `Display` only renders exact multiples, so an age of 1h30m45s
+/// would print as `5445s` — precise, and unreadable in a column.
 fn format_age(age: Option<Duration>) -> String {
     let Some(age) = age else {
         return "?".to_string();

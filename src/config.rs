@@ -2,7 +2,7 @@
 //!
 //! Configuration is read from any git config scope but always written to the
 //! repository-local `.git/config`. [`Config::try_load`] returns `None` when the
-//! section is absent, which is what triggers [`run_setup_wizard`].
+//! section is absent, which is what triggers the wizard in [`load_or_setup`].
 
 use anyhow::{Context, Result};
 
@@ -73,13 +73,13 @@ pub struct Config {
     pub forge: Option<ForgeSetting>,
 }
 
-/// A conventional starting point, **not** the value git-wipe falls back to at
-/// runtime.
+/// A conventional starting point: `main` and `master` protected.
 ///
-/// Production never reaches this: [`Config::try_load`] either returns the
+/// A wipe run never reaches this: [`Config::try_load`] either returns the
 /// stored configuration or `None`, and `None` runs the setup wizard, whose own
-/// fallback is `main` alone. The extra `master` here exists so tests and
-/// external callers get a sensible two-branch default.
+/// fallback is `main` alone. The one runtime user is `git wipe status` in a
+/// repository that was never configured, which falls back to this rather than
+/// prompting; tests use it too.
 impl Default for Config {
     fn default() -> Self {
         Self {
