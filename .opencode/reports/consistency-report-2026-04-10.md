@@ -8,7 +8,7 @@
 > the next version and the changelog. All `README.md:NNN` line references are
 > also stale by roughly 80 lines.
 >
-> See `consistency-report-2026-08-15.md` for the current review.
+> Run a fresh consistency review rather than relying on this one.
 
 **Date**: 2026-04-10
 **Project**: git-synchronizer (git-sync)
