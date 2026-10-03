@@ -516,7 +516,19 @@ pub fn find_merged_remote(
         }
     }
 
-    for target in &targets {
+    let present: HashSet<&String> = remote_branches.iter().collect();
+
+    // A protected branch that was never pushed has no remote counterpart to
+    // compare against; with none at all there is nothing more to detect.
+    let remote_targets: Vec<String> = targets
+        .iter()
+        .filter(|t| present.contains(t))
+        .map(|t| format!("{remote}/{t}"))
+        .collect();
+
+    // The ancestor pass compares against the remote-tracking targets too: a
+    // branch merged only into an unpushed local `main` is still live remotely.
+    for target in &remote_targets {
         let merged = git.merged_remote_branches(target, remote)?;
         for branch in merged {
             if filter.is_excluded(&branch) {
@@ -527,16 +539,6 @@ pub fn find_merged_remote(
             }
         }
     }
-
-    let present: HashSet<&String> = remote_branches.iter().collect();
-
-    // A protected branch that was never pushed has no remote counterpart to
-    // compare against; with none at all there is nothing more to detect.
-    let remote_targets: Vec<String> = targets
-        .iter()
-        .filter(|t| present.contains(t))
-        .map(|t| format!("{remote}/{t}"))
-        .collect();
 
     if !remote_targets.is_empty() {
         run_strategies(
@@ -1563,6 +1565,39 @@ mod tests {
         assert!(
             !remote.contains(&"feature/unpushed-merge".to_string()),
             "remote detection must compare against origin/main, got {remote:?}"
+        );
+
+        drop(seed);
+        Ok(())
+    }
+
+    /// The ancestor pass compares against `origin/main` as well: a branch that
+    /// is an ancestor of an unpushed local `main` is not merged remotely.
+    #[test]
+    fn find_merged_remote_ignores_ancestors_of_unpushed_local_trunk() -> Result<()> {
+        let (_dir, seed, work) = init_repo_with_remote_merges()?;
+        use crate::test_helpers::git_in;
+
+        git_in(&work, &["checkout", "-b", "feature/unpushed-ff", "main"])?;
+        std::fs::write(work.join("ff.txt"), "ff")?;
+        git_in(&work, &["add", "."])?;
+        git_in(&work, &["commit", "-m", "ff feature"])?;
+        git_in(&work, &["push", "-u", "origin", "feature/unpushed-ff"])?;
+
+        // Fast-forward the local trunk only: the branch tip becomes an ancestor
+        // of local `main`, but `origin/main` does not contain it.
+        git_in(&work, &["checkout", "main"])?;
+        git_in(&work, &["merge", "--ff-only", "feature/unpushed-ff"])?;
+        git_in(&work, &["fetch", "origin"])?;
+
+        let git = Git::with_workdir(false, &work);
+        let config = protected_main();
+        let filter = filter_for(&git, &config)?;
+        let remote = find_merged_remote(&git, &filter, "origin", Effort::Quick, TEST_JOBS, None)?
+            .candidates;
+        assert!(
+            !remote.contains(&"feature/unpushed-ff".to_string()),
+            "ancestor detection must compare against origin/main, got {remote:?}"
         );
 
         drop(seed);
