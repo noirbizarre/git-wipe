@@ -49,8 +49,8 @@ change together:
 
 ## One-off setup
 
-Only the credentials are manual. The pkgbases and the formula create
-themselves on the first run.
+Only the credentials, their environments and the empty tap repository are
+manual. The pkgbases and the formula create themselves on the first run.
 
 ### AUR
 
@@ -66,15 +66,6 @@ the key belongs to the account claiming them — which is exactly what happened
 for v0.3.0. Expect the AUR's RPC metadata to lag the package page by a few
 minutes after an import: `aur.archlinux.org/packages/<name>` is authoritative,
 `rpc/v5/info` is a cache.
-
-### Homebrew
-
-Create the public repository `noirbizarre/homebrew-tap` (the `homebrew-`
-prefix is what makes `brew install noirbizarre/tap/git-wipe` work). An empty
-repository is enough; the workflow creates `Formula/` on the first push.
-
-Then create a `homebrew` environment holding `TAP_TOKEN`, a fine-grained token
-with `contents: write` on that repository and nothing else.
 
 ### Homebrew
 
