@@ -272,9 +272,10 @@ that has never been configured is an error rather than a setup wizard (run
 | `min_age` | The effective minimum worktree age, e.g. `"0s"` or `"2h"` |
 | `forge` | The effective forge setting: `"false"`, `"true"` (auto-detect) or a forge name |
 | `jobs` | The effective number of concurrent git probes used during analysis |
-| `fetch` | Phase 1: per-remote fetch/prune outcome |
-| `pull` | Phase 2: per-branch fast-forward outcome |
-| `local` | Phase 3: `merged`/`gone` candidates (`pr_merged` lists the ones the forge settled), plus per-branch and per-worktree outcomes |
+| `fetch` | Phase 1: per-remote fetch/prune outcome, with `skipped` set under `--no-fetch` |
+| `pull` | Phase 2: per-branch fast-forward outcome, with `skipped` set under `--no-pull` |
+| `local` | Phase 3: `merged`/`gone` candidates (`pr_merged` lists the ones the forge settled), plus per-branch and per-worktree outcomes; `skipped` is set under `--remote-only` |
+| `remotes_skipped` | Whether `--local-only` skipped phase 4 |
 | `remotes` | Phase 4: merged branches (and the `pr_merged` subset) and deletion outcome per remote |
 | `warnings` | Non-fatal messages surfaced during the run |
 | `errors` | Failed operations, each with `action`, `target`, `kind` (`network`, `auth`, `other`) and `message` |
