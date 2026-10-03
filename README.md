@@ -36,6 +36,7 @@ configured remotes. It also handles orphaned worktree cleanup.
 - Ignore branch patterns entirely (`wipe.ignore`) -- never fetched, never analysed
 - Multiple merge detection strategies (fast merge, rebase-aware via `git cherry`, tree SHA comparison, empty three-dot diff, patch-ID matching, simulated merge, squash-merge detection, and deleted-upstream detection)
 - Tunable detection thoroughness with `--effort <1-3>` (speed vs accuracy)
+- Optional, opt-in forge lookup (`--forge`): GitHub, GitLab, Gitea and Forgejo are asked whether a branch's pull/merge request was merged, which is the only exact answer for squash and rebase merges -- networked, never on by default, and never fatal
 - Parallel analysis (`--jobs`, defaults to the CPU count) with byte-identical results at any job count
 - Automatic fast-forward of target branches before detection (with `--no-pull` to skip)
 - Optional [worktrunk](https://worktrunk.dev) integration for worktree removal (triggers pre/post-remove hooks)
@@ -196,12 +197,14 @@ Statuses combine, and are rendered most-actionable first:
 | `orphan` | The worktree has no live branch: its branch ref is gone, or it is detached |
 | `locked` | The worktree is locked (`git worktree lock`) |
 | `merged` | Detected as merged into a protected branch, using the same strategies as a wipe run |
+| `pr-merged` | Merged according to the forge (only with `--forge`); shown in place of `merged` |
 | `gone` | The configured upstream no longer exists |
 | `unmerged` | Holds commits absent from every merge target |
 | `dirty` | The working tree has uncommitted changes |
 | `clean` | The working tree has no uncommitted change |
 
-`merged` and `unmerged` are exclusive, as are `clean` and `dirty`. A branch
+`merged` (or `pr-merged`) and `unmerged` are exclusive, as are `clean` and
+`dirty`. `--merged` keeps both kinds of merged entry. A branch
 without a worktree gets neither `clean` nor `dirty` — there is no working tree
 to inspect.
 
@@ -266,14 +269,19 @@ that has never been configured is an error rather than a setup wizard (run
 | `dry_run` | Whether `--dry-run` was in effect |
 | `effort` | The effective merge-detection level (`1`-`3`) |
 | `min_age` | The effective minimum worktree age, e.g. `"0s"` or `"2h"` |
+| `forge` | The effective forge setting: `"false"`, `"true"` (auto-detect) or a forge name |
 | `jobs` | The effective number of concurrent git probes used during analysis |
 | `fetch` | Phase 1: per-remote fetch/prune outcome |
 | `pull` | Phase 2: per-branch fast-forward outcome |
-| `local` | Phase 3: `merged`/`gone` candidates, plus per-branch and per-worktree outcomes |
-| `remotes` | Phase 4: merged branches and deletion outcome per remote |
+| `local` | Phase 3: `merged`/`gone` candidates (`pr_merged` lists the ones the forge settled), plus per-branch and per-worktree outcomes |
+| `remotes` | Phase 4: merged branches (and the `pr_merged` subset) and deletion outcome per remote |
 | `warnings` | Non-fatal messages surfaced during the run |
 | `errors` | Failed operations, each with `action`, `target`, `kind` (`network`, `auth`, `other`) and `message` |
 | `summary` | `local_branches_deleted`, `remote_branches_deleted`, `worktrees_removed`, `errors`, `freed_kb` (bytes freed by removed worktrees, in kibibytes; zero unless `--min-size`/`--size` was given) |
+
+Each local and remote branch entry carries a `reason`: `merged`, `gone`, or
+`pr-merged` when the forge reported its pull/merge request as merged (see
+[Forge detection](#forge-detection)).
 
 Item statuses are `updated`, `deleted`, `removed`, `skipped`, `locked`,
 `too_young`, `too_small`, `failed` or `dry_run`. A fatal error still yields a
@@ -378,6 +386,7 @@ to the repository-local `.git/config`:
     minage = 2h
     minsize = 100M
     jobs = 8
+    forge = true
 ```
 
 | Key | Type | Description |
@@ -390,6 +399,7 @@ to the repository-local `.git/config`:
 | `minage` | duration | Minimum age a worktree must have before it may be removed, e.g. `30s`, `2h`, `7d`. Defaults to `0s` (no guard); `--min-age` overrides it |
 | `minsize` | size | Minimum on-disk size a worktree must have before it may be removed, e.g. `512B`, `100K`, `100M`, `2G`. Defaults to `0B` (no guard); `--min-size` overrides it |
 | `jobs` | integer >= 1 | How many read-only git probes analysis may run at once. Defaults to the CPU count; `--jobs` overrides it, `--verbose` forces `1` |
+| `forge` | `true`, `false` or a forge name | Ask the forge about merged pull/merge requests before trying git (see [Forge detection](#forge-detection)). `true` identifies the forge from each remote URL; `github`, `gitlab`, `gitea` or `forgejo` forces a kind for self-hosted instances whose host name does not give it away. Off when omitted; `--forge` enables it and `--no-forge` disables it |
 
 When `worktrunk` is unset, git-wipe enables it only if the repository has a
 `[worktrunk]` config section **and** `wt` is on `$PATH`; it then asks once per
@@ -441,6 +451,82 @@ otherwise shield an ignored branch from pruning, so in that case a follow-up
 `<remote>/<branch>` tracking ref of any ignored branch deleted upstream. If
 only that follow-up fails, the fetch still counts and a warning is reported.
 
+### Forge detection
+
+Squash and rebase merges rewrite history, so a merged branch is not an ancestor
+of the target and git can only guess at it. The forge knows exactly. With
+`--forge` (or `wipe.forge`), git-wipe asks it **first**: a branch whose
+pull/merge request was merged is reported as `pr-merged`, and only the branches
+the forge could not settle go through the offline strategies. That is usually
+cheaper than the effort 3 strategies, and it is the only exact answer when a
+squash was amended in review or merged after a conflict resolution.
+
+```sh
+# One run
+git wipe --forge
+
+# Always, for this repository
+git wipe config set forge true
+
+# A self-hosted instance whose host name gives nothing away
+git wipe config set forge gitea
+
+# Back to offline for one run
+git wipe --no-forge
+```
+
+`--forge` takes an optional kind with an equals sign (`--forge=gitlab`).
+
+| Forge | Detected from | API |
+| --- | --- | --- |
+| GitHub, GitHub Enterprise Server | `github.com`, hosts containing `github` | GraphQL |
+| GitLab, self-managed | `gitlab.com`, hosts containing `gitlab` | GraphQL |
+| Gitea | hosts containing `gitea` | REST |
+| Forgejo, Codeberg | `codeberg.org`, hosts containing `forgejo` | REST |
+
+The forge is identified from each remote's URL (https, `ssh://` and `user@host:path`
+forms), with no network access. A remote whose host is not recognised is simply
+skipped unless `wipe.forge` names a kind. All remotes in `wipe.remote` (or all
+remotes) are consulted, each with its own forge. git-wipe speaks to the forge
+API itself: no `gh`, `glab` or any other CLI is needed.
+
+**It is networked, and opt-in.** Enabling it sends the names of your candidate
+branches (never protected or ignored ones, nor the current branch) to the
+remote forge. It is never on by default.
+
+**Authentication** comes from the environment only; tokens are never read from
+or written to git config.
+
+| Forge | Variables | Without a token |
+| --- | --- | --- |
+| GitHub | `GITHUB_TOKEN`, `GH_TOKEN` (`GH_ENTERPRISE_TOKEN` for Enterprise Server) | Not possible: the GraphQL API requires one |
+| GitLab | `GITLAB_TOKEN`, `GL_TOKEN` | Public projects only |
+| Gitea, Forgejo | `GITEA_TOKEN`, `FORGEJO_TOKEN` | Public repositories only |
+
+A token only needs read access to pull/merge requests. GitHub tokens are never
+offered to a host other than `github.com`, except through the Enterprise
+variables.
+
+**A branch only counts as `pr-merged` if the pull/merge request ended exactly at
+the branch's current tip.** A branch name reused after a merge, or advanced
+since, is not reported, and git judges it as usual.
+
+**The forge never makes a run fail.** Whatever it cannot answer is left to the
+offline strategies, which behave exactly as without `--forge`:
+
+- *Resolved*: the request was merged at the tip; the branch is `pr-merged`.
+- *Not found*: no merged request, or one ending elsewhere; git decides.
+- *Unsupported*: the host is not recognised, or there is no remote; git
+  decides, with one warning if no remote could be asked at all.
+- *Unavailable*: network error, rejected or missing credentials, timeout (5s to
+  connect, 20s per request), server error; one warning per remote naming the
+  cause, then git decides.
+
+Requests are batched (about 40 branches per GitHub request, 50 per GitLab
+request), so a run costs a handful of calls rather than one per branch. Gitea
+and Forgejo have no branch filter, so their 500 most recently updated closed
+pull requests are searched; branches older than that fall back to git.
+
 ### First run
 
 On first run (when no `[wipe]` config section exists), an interactive
@@ -451,6 +537,7 @@ setup wizard runs automatically:
 3. Asks for branch patterns to ignore entirely (e.g. `wip/*`)
 4. Lists available remotes and asks which ones to operate on
 5. If [worktrunk](https://worktrunk.dev) (`wt`) is detected on `$PATH`, asks whether to use it for worktree removal
+6. If a remote points at a known forge (GitHub, GitLab, Gitea or Forgejo, recognised from its URL alone, with no network access), asks whether to enable [forge detection](#forge-detection). With remotes on different forges, the question names each remote and its forge. Declining, or having no recognisable forge, keeps the offline behaviour; `git wipe config setup` reruns the wizard at any time
 
 ## How it works
 
@@ -480,7 +567,9 @@ CLI flags:
    protected) using several complementary strategies, applied from cheapest to
    most expensive and stopping as soon as one matches. How many of them run is
    controlled by `--effort` (or `wipe.effort`), each level including the
-   previous ones. The same levels drive remote-branch detection in step 4:
+   previous ones. The same levels drive remote-branch detection in step 4.
+   With `--forge`, [the forge](#forge-detection) is asked before any of them,
+   and they only judge what it leaves undecided:
 
    **Effort 1 (fastest)**
 
@@ -637,6 +726,7 @@ flowchart TD
 
     LocalCheck{--remote-only?}
     LocalCheck -- No --> FindLocal[Find merged local branches\n+ orphan worktrees]
+    FindLocal --> ForgeAsk["Forge lookup, first\nPR/MR merged at the tip\n(--forge, networked)"]
     FindLocal --> Merged["Standard detection\ngit branch --merged\n(effort 1+)"]
     FindLocal --> Cherry["Rebase-aware detection\ngit cherry\n(effort 2+)"]
     FindLocal --> TreeSHA["Tree SHA comparison\n(effort 2+)"]
@@ -646,6 +736,7 @@ flowchart TD
     FindLocal --> Squash["Squash-merge detection\ncombined patch-id\n(effort 3)"]
     FindLocal --> GoneUpstream[Deleted-upstream detection\nrequires a fetch]
     FindLocal --> Orphans[Find orphan worktrees]
+    ForgeAsk --> SelectLocal
     Merged --> SelectLocal[Unified multiselect:\nbranches + worktrees]
     Cherry --> SelectLocal
     TreeSHA --> SelectLocal

@@ -5,6 +5,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::duration::MinAge;
+use crate::forge::setting::ForgeSetting;
 use crate::size::Size;
 
 /// Wipe out merged local branches and worktrees.
@@ -136,6 +137,43 @@ pub struct Cli {
     /// Do not use worktrunk for worktree removal (overrides config)
     #[arg(long, overrides_with = "worktrunk")]
     pub no_worktrunk: bool,
+
+    /// Ask the forge which branches were merged, before trying git (networked)
+    ///
+    /// Squash and rebase merges rewrite history, so git can only guess at them.
+    /// The forge knows: with this flag, the pull/merge request state of each
+    /// branch is looked up first, and only the branches it cannot settle go
+    /// through the offline strategies. Branches it settles are reported as
+    /// `pr-merged`.
+    ///
+    /// Without a value the forge is identified from each remote URL (GitHub,
+    /// GitLab, Gitea and Forgejo). Pass `--forge=<KIND>` (github, gitlab,
+    /// gitea or forgejo) for a self-hosted instance whose host name gives it
+    /// away. A branch only counts as merged if the request ended exactly at
+    /// the branch tip.
+    ///
+    /// This sends branch names to the forge. Tokens come from the environment,
+    /// never from git config: GITHUB_TOKEN or GH_TOKEN (GH_ENTERPRISE_TOKEN
+    /// for Enterprise Server), GITLAB_TOKEN or GL_TOKEN, GITEA_TOKEN or
+    /// FORGEJO_TOKEN. GitHub requires one; the others also work anonymously on
+    /// public projects.
+    ///
+    /// If the forge cannot be reached or refuses the request, a warning is
+    /// shown and the offline strategies run as usual. Enabled permanently with
+    /// `git wipe config set forge true`.
+    #[arg(
+        long,
+        value_name = "KIND",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+        global = true
+    )]
+    pub forge: Option<ForgeSetting>,
+
+    /// Do not consult the forge (overrides config)
+    #[arg(long, overrides_with = "forge", global = true)]
+    pub no_forge: bool,
 
     /// Output a single JSON document to stdout (implies --yes)
     ///
@@ -438,6 +476,41 @@ mod tests {
         let cli = Cli::parse_from(["git-wipe", "--no-worktrunk", "--worktrunk"]);
         assert!(cli.worktrunk);
         assert!(!cli.no_worktrunk);
+    }
+
+    #[test]
+    fn cli_forge_flag() {
+        assert_eq!(Cli::parse_from(["git-wipe"]).forge, None);
+        assert_eq!(
+            Cli::parse_from(["git-wipe", "--forge"]).forge,
+            Some(ForgeSetting::Auto)
+        );
+        assert_eq!(
+            Cli::parse_from(["git-wipe", "--forge=gitlab"]).forge,
+            Some(ForgeSetting::Kind(crate::forge::setting::ForgeKind::GitLab))
+        );
+        assert!(Cli::try_parse_from(["git-wipe", "--forge=svn"]).is_err());
+    }
+
+    #[test]
+    fn cli_forge_flag_does_not_swallow_a_subcommand() {
+        let cli = Cli::parse_from(["git-wipe", "--forge", "status"]);
+        assert_eq!(cli.forge, Some(ForgeSetting::Auto));
+        assert!(matches!(cli.command, Some(Command::Status { .. })));
+        let cli = Cli::parse_from(["git-wipe", "status", "--forge"]);
+        assert_eq!(cli.forge, Some(ForgeSetting::Auto));
+    }
+
+    #[test]
+    fn cli_no_forge_overrides_forge() {
+        let cli = Cli::parse_from(["git-wipe", "--no-forge"]);
+        assert!(cli.no_forge);
+        let cli = Cli::parse_from(["git-wipe", "--forge", "--no-forge"]);
+        assert!(cli.no_forge);
+        assert_eq!(cli.forge, None);
+        let cli = Cli::parse_from(["git-wipe", "--no-forge", "--forge"]);
+        assert!(!cli.no_forge);
+        assert_eq!(cli.forge, Some(ForgeSetting::Auto));
     }
 
     #[test]

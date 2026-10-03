@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 
 use crate::branches::Effort;
 use crate::duration::MinAge;
+use crate::forge::{self, ForgeSetting};
 use crate::git::Git;
 use crate::size::Size;
 use crate::ui::Ui;
@@ -67,6 +68,9 @@ pub struct Config {
     /// How many read-only git probes may run at once during analysis.
     /// `None` means use the CPU count.
     pub jobs: Option<u32>,
+    /// Whether to ask the forge about merged pull/merge requests first.
+    /// `None` means off.
+    pub forge: Option<ForgeSetting>,
 }
 
 /// A conventional starting point, **not** the value git-wipe falls back to at
@@ -87,6 +91,7 @@ impl Default for Config {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         }
     }
 }
@@ -138,6 +143,12 @@ impl Config {
             .transpose()
             .with_context(|| format!("invalid {SECTION}.jobs in git config"))?;
 
+        let forge = git
+            .config_get(&format!("{SECTION}.forge"))?
+            .map(|v| v.parse::<ForgeSetting>())
+            .transpose()
+            .with_context(|| format!("invalid {SECTION}.forge in git config"))?;
+
         Ok(Some(Self {
             protected,
             ignore,
@@ -147,6 +158,7 @@ impl Config {
             min_age,
             min_size,
             jobs,
+            forge,
         }))
     }
 
@@ -222,6 +234,16 @@ impl Config {
             }
             None => {
                 git.config_unset_all(&format!("{SECTION}.jobs"))?;
+            }
+        }
+
+        // Forge-backed merge detection (optional)
+        match self.forge {
+            Some(forge) => {
+                git.config_set(&format!("{SECTION}.forge"), &forge.to_string())?;
+            }
+            None => {
+                git.config_unset_all(&format!("{SECTION}.forge"))?;
             }
         }
 
@@ -323,6 +345,9 @@ impl Config {
             None
         };
 
+        // ── Forge ────────────────────────────────────────────────────
+        let forge = forge_step(git, ui);
+
         // ── Save ─────────────────────────────────────────────────────
 
         // Effort, min age and min size are deliberately not asked here: they
@@ -338,6 +363,7 @@ impl Config {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge,
         };
         config.save(git)?;
 
@@ -346,6 +372,55 @@ impl Config {
 
         Ok(config)
     }
+}
+
+/// Offer forge-backed merge detection when a remote points at a known forge.
+///
+/// Only identifies forges from remote URLs: nothing is contacted, so it works
+/// offline and with no credentials. Setup must never fail because of it, so
+/// every problem here, a failed prompt included, just means "not enabled".
+fn forge_step(git: &Git, ui: &Ui) -> Option<ForgeSetting> {
+    let remotes = git.remotes().unwrap_or_default();
+    let detections = forge::detect_remotes(git, &remotes);
+    if detections.is_empty() {
+        return None;
+    }
+
+    ui.blank();
+    let question = forge_question(&detections);
+    match ui.confirm(&question, false) {
+        Ok(true) => Some(ForgeSetting::Auto),
+        _ => None,
+    }
+}
+
+/// The prompt offering forge detection, spelling out which remote is which.
+///
+/// With remotes on different forges the answer applies to all of them, so the
+/// question names each pairing instead of silently picking one.
+fn forge_question(detections: &[forge::Detection]) -> String {
+    let mut kinds: Vec<forge::ForgeKind> = Vec::new();
+    for detection in detections {
+        if !kinds.contains(&detection.kind) {
+            kinds.push(detection.kind);
+        }
+    }
+
+    let pairs = detections
+        .iter()
+        .map(|d| format!("{} ({} on {})", d.remote, d.kind.label(), d.host))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let scope = if kinds.len() == 1 {
+        format!("{} detected", kinds[0].label())
+    } else {
+        "Remotes point to different forges; each is asked its own".to_string()
+    };
+    format!(
+        "{scope}: {pairs}. Ask the forge which pull/merge requests were merged, \
+         before checking git? (networked: branch names are sent to the forge)"
+    )
 }
 
 /// Load config, running the interactive setup if needed.
@@ -381,6 +456,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         config.save(&git)?;
 
@@ -404,6 +480,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         config.save(&git)?;
 
@@ -450,6 +527,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         config.save(&git)?;
 
@@ -471,6 +549,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         }
         .save(&git)?;
 
@@ -492,6 +571,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         }
         .save(&git)?;
 
@@ -504,6 +584,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         }
         .save(&git)?;
 
@@ -525,6 +606,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         config1.save(&git)?;
 
@@ -537,6 +619,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         config2.save(&git)?;
 
@@ -641,6 +724,7 @@ mod tests {
 
         let config = Config {
             jobs: Some(4),
+            forge: None,
             ..Config::default()
         };
         config.save(&git)?;
@@ -677,6 +761,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         config.save(&git)?;
 
@@ -693,6 +778,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         config2.save(&git)?;
 
@@ -709,6 +795,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         config3.save(&git)?;
 
@@ -730,6 +817,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         config.save(&git)?;
 
@@ -739,5 +827,76 @@ mod tests {
         assert_eq!(loaded.protected, vec!["main"]);
         assert!(loaded.remotes.is_none());
         Ok(())
+    }
+
+    #[test]
+    fn forge_setting_roundtrips_through_git_config() -> Result<()> {
+        use crate::forge::ForgeKind;
+        let (_dir, git) = crate::test_helpers::init_repo()?;
+
+        for forge in [
+            None,
+            Some(ForgeSetting::Off),
+            Some(ForgeSetting::Auto),
+            Some(ForgeSetting::Kind(ForgeKind::GitLab)),
+        ] {
+            let config = Config {
+                forge,
+                ..Config::default()
+            };
+            config.save(&git)?;
+            let loaded = Config::try_load(&git)?.expect("config should exist");
+            assert_eq!(loaded.forge, forge);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn forge_is_stored_as_wipe_forge() -> Result<()> {
+        let (_dir, git) = crate::test_helpers::init_repo()?;
+        Config {
+            forge: Some(ForgeSetting::Auto),
+            ..Config::default()
+        }
+        .save(&git)?;
+        assert_eq!(git.config_get("wipe.forge")?.as_deref(), Some("true"));
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_forge_in_git_config_is_reported() -> Result<()> {
+        let (_dir, git) = crate::test_helpers::init_repo()?;
+        Config::default().save(&git)?;
+        git.config_set("wipe.forge", "bitbucket")?;
+        let err = Config::try_load(&git).unwrap_err();
+        assert!(format!("{err:#}").contains("wipe.forge"), "{err:#}");
+        Ok(())
+    }
+
+    #[test]
+    fn forge_question_names_each_remote_and_its_forge() {
+        use crate::forge::{Detection, ForgeKind};
+        let one = [Detection {
+            remote: "origin".into(),
+            kind: ForgeKind::GitHub,
+            host: "github.com".into(),
+        }];
+        let question = forge_question(&one);
+        assert!(question.starts_with("GitHub detected"), "{question}");
+        assert!(question.contains("origin (GitHub on github.com)"));
+        assert!(question.contains("networked"));
+
+        let two = [
+            one[0].clone(),
+            Detection {
+                remote: "mirror".into(),
+                kind: ForgeKind::GitLab,
+                host: "gitlab.com".into(),
+            },
+        ];
+        let question = forge_question(&two);
+        assert!(question.contains("different forges"), "{question}");
+        assert!(question.contains("origin (GitHub on github.com)"));
+        assert!(question.contains("mirror (GitLab on gitlab.com)"));
     }
 }

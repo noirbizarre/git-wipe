@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::branches::Effort;
 use crate::duration::MinAge;
+use crate::forge::ForgeSetting;
 use crate::git::{GitCommandError, GitErrorKind};
 use crate::size::Size;
 
@@ -72,6 +73,11 @@ pub enum BranchReason {
     Merged,
     /// Its upstream branch was deleted.
     Gone,
+    /// The forge reports its pull/merge request as merged, ending at the
+    /// branch tip. Takes precedence over [`BranchReason::Merged`]: forge
+    /// detection runs first.
+    #[serde(rename = "pr-merged")]
+    PrMerged,
 }
 
 /// Whether a worktree was tied to a candidate branch or orphaned.
@@ -167,6 +173,8 @@ pub struct LocalPhase {
     pub skipped: bool,
     /// Branches detected as merged into a target.
     pub merged: Vec<String>,
+    /// The subset of `merged` the forge reported (`reason: "pr-merged"`).
+    pub pr_merged: Vec<String>,
     /// Branches whose upstream was deleted.
     pub gone: Vec<String>,
     pub branches: Vec<LocalBranch>,
@@ -233,12 +241,15 @@ pub struct RemoteReport {
     pub remote: String,
     /// Merged branches detected on this remote.
     pub merged: Vec<String>,
+    /// The subset of `merged` the forge reported (`reason: "pr-merged"`).
+    pub pr_merged: Vec<String>,
     pub branches: Vec<RemoteBranch>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RemoteBranch {
     pub branch: String,
+    pub reason: BranchReason,
     pub status: ItemStatus,
 }
 
@@ -264,6 +275,8 @@ pub struct Report {
     pub effort: Effort,
     /// Effective minimum worktree age, e.g. `"0s"` or `"2h"`.
     pub min_age: MinAge,
+    /// Effective forge setting: `false`, `true` (auto-detect) or a forge name.
+    pub forge: ForgeSetting,
     /// Effective number of concurrent git probes used during analysis.
     /// Reported for reproducibility only: it never changes the results.
     pub jobs: usize,
@@ -289,6 +302,7 @@ impl Report {
             dry_run,
             effort,
             min_age,
+            forge: ForgeSetting::Off,
             jobs,
             fetch: FetchPhase::default(),
             pull: PullPhase::default(),
@@ -341,6 +355,8 @@ pub struct ConfigReport {
     pub jobs: Option<u32>,
     /// `null` means "auto-detect".
     pub worktrunk: Option<bool>,
+    /// `null` means "off".
+    pub forge: Option<ForgeSetting>,
 }
 
 /// Render a path for the JSON document (lossy, like the human output).
@@ -372,6 +388,9 @@ pub enum StatusKind {
 pub enum StatusFlag {
     /// Detected as merged into a protected branch.
     Merged,
+    /// The forge reports its pull/merge request as merged.
+    #[serde(rename = "pr-merged")]
+    PrMerged,
     /// Configured upstream no longer exists.
     Gone,
     /// Working tree has no uncommitted change.
@@ -526,6 +545,7 @@ mod tests {
             branch_protected: Vec::new(),
             branch_ignored: Vec::new(),
             worktrunk: None,
+            forge: None,
             effort: None,
             min_age: None,
             min_size: None,
@@ -544,6 +564,7 @@ mod tests {
             branch_protected: Vec::new(),
             branch_ignored: Vec::new(),
             worktrunk: Some(true),
+            forge: Some(ForgeSetting::Auto),
             min_age: None,
             min_size: None,
             effort: Some(Effort::Quick),
@@ -559,5 +580,26 @@ mod tests {
     #[test]
     fn path_string_renders_the_path() {
         assert_eq!(path_string(Path::new("/tmp/wt")), "/tmp/wt");
+    }
+
+    #[test]
+    fn pr_merged_is_distinct_in_json() {
+        let value = serde_json::to_value(BranchReason::PrMerged).unwrap();
+        assert_eq!(value, "pr-merged");
+        let value = serde_json::to_value(StatusFlag::PrMerged).unwrap();
+        assert_eq!(value, "pr-merged");
+        assert_eq!(
+            serde_json::to_value(BranchReason::Merged).unwrap(),
+            "merged"
+        );
+    }
+
+    #[test]
+    fn report_carries_the_effective_forge_setting() {
+        let mut report = Report::new(false, Effort::default(), MinAge::default(), 1);
+        assert_eq!(serde_json::to_value(&report).unwrap()["forge"], "false");
+        report.forge = ForgeSetting::Auto;
+        assert_eq!(serde_json::to_value(&report).unwrap()["forge"], "true");
+        assert!(serde_json::to_value(&report).unwrap()["local"]["pr_merged"].is_array());
     }
 }

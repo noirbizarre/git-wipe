@@ -16,6 +16,7 @@ mod cleaner;
 mod cli;
 mod config;
 mod duration;
+mod forge;
 mod git;
 mod parallel;
 mod pid;
@@ -29,7 +30,7 @@ mod worktrees;
 
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 
 use cli::{Cli, Command, ConfigAction};
@@ -273,6 +274,15 @@ fn handle_config_command(
                             None => "(default: CPU count)".to_string(),
                         },
                     );
+
+                    ui.field(
+                        "forge",
+                        &match cfg.forge {
+                            Some(forge::ForgeSetting::Off) | None => "disabled".to_string(),
+                            Some(forge::ForgeSetting::Auto) => "enabled (auto-detect)".to_string(),
+                            Some(forge::ForgeSetting::Kind(kind)) => format!("enabled ({kind})"),
+                        },
+                    );
                 }
                 None => {
                     ui.muted("No configuration found. Run `git wipe` to start the setup wizard.");
@@ -283,6 +293,11 @@ fn handle_config_command(
 
         ConfigAction::Set { key, value } => {
             let full_key = format!("{}.{key}", config::SECTION);
+            if key == "forge" {
+                value
+                    .parse::<forge::ForgeSetting>()
+                    .with_context(|| format!("invalid value for {full_key}"))?;
+            }
             if is_multi_valued(&key) {
                 // `git config --local <key> <value>` refuses a key that already
                 // holds several values. Treat `set` as "replace every value"
@@ -408,6 +423,7 @@ fn list_config_json(git: &git::Git) -> Result<()> {
         min_size: cfg.as_ref().and_then(|c| c.min_size),
         jobs: cfg.as_ref().and_then(|c| c.jobs),
         worktrunk: cfg.as_ref().and_then(|c| c.worktrunk),
+        forge: cfg.as_ref().and_then(|c| c.forge),
     };
     report::print_json(&report)
 }
@@ -425,6 +441,7 @@ fn handle_status(git: &git::Git, ui: &ui::Ui, cli: &Cli, merged_only: bool) -> R
     let opts = status::StatusOptions {
         effort: resolve_effort(cli, &cfg)?,
         jobs: resolve_jobs(cli, &cfg),
+        forge: resolve_forge(cli, &cfg),
         // Deliberately not `resolve_min_age`/`resolve_min_size`: here they are
         // display filters, and a `wipe.minage`/`wipe.minsize` configured as a
         // removal safety net must not silently truncate the listing.
@@ -434,7 +451,15 @@ fn handle_status(git: &git::Git, ui: &ui::Ui, cli: &Cli, merged_only: bool) -> R
         merged_only,
     };
 
-    let scan = status::scan(git, &filter, ui, opts)?;
+    let forges = opts
+        .forge
+        .is_enabled()
+        .then(|| cleaner::effective_remotes(git, &cfg))
+        .transpose()?
+        .map(|remotes| forge::RemoteForges::new(git, opts.forge, remotes));
+    let forge = forges.as_ref().map(|f| f as &dyn forge::ForgeSource);
+
+    let scan = status::scan(git, &filter, ui, opts, forge)?;
     let total = scan.rows.len();
     let rows = status::filter_rows(scan.rows, opts);
 
@@ -481,6 +506,7 @@ fn handle_clean(git: &git::Git, ui: &ui::Ui, cli: &Cli) -> Result<()> {
         min_size,
         show_size: cli.size,
         jobs,
+        forge: resolve_forge(cli, &cfg),
     };
 
     let report = cleaner::run(git, &cfg, ui, &opts)?;
@@ -501,6 +527,17 @@ fn resolve_effort(cli: &Cli, cfg: &config::Config) -> Result<branches::Effort> {
         return branches::Effort::try_from(level);
     }
     Ok(cfg.effort.unwrap_or_default())
+}
+
+/// Resolve whether the forge is consulted for merge detection.
+///
+/// Priority: `--no-forge` > `--forge` > config setting > off. Off is the
+/// default because the lookup is networked and sends branch names to the forge.
+fn resolve_forge(cli: &Cli, cfg: &config::Config) -> forge::ForgeSetting {
+    if cli.no_forge {
+        return forge::ForgeSetting::Off;
+    }
+    cli.forge.or(cfg.forge).unwrap_or_default()
 }
 
 /// Resolve the minimum age a worktree must have before it may be removed.
@@ -670,6 +707,7 @@ mod tests {
         let cfg_default = config::Config::default();
         let cfg_four = config::Config {
             jobs: Some(4),
+            forge: None,
             ..config::Config::default()
         };
 
@@ -851,10 +889,11 @@ mod tests {
             min_size: cli.min_size.unwrap_or_default(),
             show_size: cli.size,
             merged_only: false,
+            forge: forge::ForgeSetting::Off,
         };
         assert!(opts.min_age.is_zero(), "wipe.minage must not leak in");
 
-        let scan = status::scan(&git, &filter, &ui::Ui::quiet(), opts)?;
+        let scan = status::scan(&git, &filter, &ui::Ui::quiet(), opts, None)?;
         assert!(!status::filter_rows(scan.rows, opts).is_empty());
         Ok(())
     }
@@ -881,11 +920,40 @@ mod tests {
             min_size: cli.min_size.unwrap_or_default(),
             show_size: cli.size,
             merged_only: false,
+            forge: forge::ForgeSetting::Off,
         };
         assert!(opts.min_size.is_zero(), "wipe.minsize must not leak in");
 
-        let scan = status::scan(&git, &filter, &ui::Ui::quiet(), opts)?;
+        let scan = status::scan(&git, &filter, &ui::Ui::quiet(), opts, None)?;
         assert!(!status::filter_rows(scan.rows, opts).is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn resolve_forge_prefers_no_forge_then_cli_then_config_then_off() {
+        use forge::{ForgeKind, ForgeSetting};
+        let cfg_off = config::Config::default();
+        let cfg_on = config::Config {
+            forge: Some(ForgeSetting::Auto),
+            ..config::Config::default()
+        };
+
+        let plain = Cli::parse_from(["git-wipe"]);
+        let flag = Cli::parse_from(["git-wipe", "--forge=gitea"]);
+        let bare = Cli::parse_from(["git-wipe", "--forge"]);
+        let no = Cli::parse_from(["git-wipe", "--no-forge"]);
+
+        // Opt-in: nothing set means off.
+        assert_eq!(resolve_forge(&plain, &cfg_off), ForgeSetting::Off);
+        // Config alone enables it.
+        assert_eq!(resolve_forge(&plain, &cfg_on), ForgeSetting::Auto);
+        // CLI wins over config.
+        assert_eq!(
+            resolve_forge(&flag, &cfg_on),
+            ForgeSetting::Kind(ForgeKind::Gitea)
+        );
+        assert_eq!(resolve_forge(&bare, &cfg_off), ForgeSetting::Auto);
+        // `--no-forge` beats config.
+        assert_eq!(resolve_forge(&no, &cfg_on), ForgeSetting::Off);
     }
 }

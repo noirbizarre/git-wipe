@@ -15,6 +15,7 @@ use crate::branches::{
 };
 use crate::config::Config;
 use crate::duration::MinAge;
+use crate::forge::{ForgeSetting, ForgeSource, RemoteForges};
 use crate::git::{Git, Worktree};
 use crate::parallel;
 use crate::pid;
@@ -63,6 +64,8 @@ pub struct CleanerOptions {
     pub use_worktrunk: bool,
     /// How thorough merge detection should be.
     pub effort: Effort,
+    /// Whether the forge is asked about merged pull/merge requests first.
+    pub forge: ForgeSetting,
     /// Minimum age a worktree must have before it may be removed.
     pub min_age: MinAge,
     /// Minimum on-disk size a worktree must have before it may be removed.
@@ -84,9 +87,20 @@ pub struct CleanerOptions {
 /// text mode discards it, `--json` serializes it to stdout.
 pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result<Report> {
     let mut report = Report::new(opts.dry_run, opts.effort, opts.min_age, opts.jobs.max(1));
+    report.forge = opts.forge;
 
     // Read protection and ignore rules once; every detection pass shares them.
     let filter = Filter::load(git, config)?;
+
+    // The forge behind each remote, identified from its URL (no network yet).
+    // Shared by the local and remote scans, which also share its answers.
+    let forges = opts
+        .forge
+        .is_enabled()
+        .then(|| effective_remotes(git, config))
+        .transpose()?
+        .map(|remotes| RemoteForges::new(git, opts.forge, remotes));
+    let forge: Option<&dyn ForgeSource> = forges.as_ref().map(|f| f as &dyn ForgeSource);
 
     // ── 1. Fetch & prune ─────────────────────────────────────────────
 
@@ -251,13 +265,14 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
     report.local.skipped = opts.remote_only;
     if !opts.remote_only {
         let merged = ui.spinner("Scanning local branches…", || {
-            find_merged_local(git, &filter, opts.effort, opts.jobs)
+            find_merged_local(git, &filter, opts.effort, opts.jobs, forge)
         })?;
         // Surfaced after the spinner: printing inside it would corrupt the
         // spinner's own line.
         for warning in &merged.warnings {
             warn(ui, &mut report, warning);
         }
+        let pr_merged = merged.pr_merged;
         let merged = merged.candidates;
 
         // Branches whose upstream was deleted. Only meaningful with fresh
@@ -282,6 +297,11 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
         let gone_set: HashSet<String> = gone.iter().cloned().collect();
 
         report.local.merged = merged.clone();
+        report.local.pr_merged = merged
+            .iter()
+            .filter(|b| pr_merged.contains(*b))
+            .cloned()
+            .collect();
         report.local.gone = gone.clone();
 
         // Everything the user may act on, in display order: content-merged
@@ -442,6 +462,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             for branch in &candidates {
                 values.push(format!("branch:{branch}"));
                 let is_gone = gone_set.contains(branch);
+                let is_pr = pr_merged.contains(branch);
                 let has_actionable_wt = wt_map
                     .get(branch)
                     .is_some_and(|wt| worktree_guard(wt, &young, &small).is_none());
@@ -450,6 +471,8 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     labels.push(format!("{branch} ({})", tilde_path(&wt.path)));
                     let mut hint = if is_gone {
                         "upstream gone + worktree".to_string()
+                    } else if is_pr {
+                        "pr-merged + worktree".to_string()
                     } else {
                         "branch + worktree".to_string()
                     };
@@ -461,6 +484,8 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     labels.push(branch.clone());
                     hints.push(if is_gone {
                         "upstream gone".to_string()
+                    } else if is_pr {
+                        "pr-merged".to_string()
                     } else {
                         String::new()
                     });
@@ -946,6 +971,8 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 branch: branch.clone(),
                 reason: if gone_set.contains(branch) {
                     BranchReason::Gone
+                } else if pr_merged.contains(branch) {
+                    BranchReason::PrMerged
                 } else {
                     BranchReason::Merged
                 },
@@ -968,13 +995,14 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
 
         for remote in &remotes {
             let merged = ui.spinner(&format!("Scanning {remote}…"), || {
-                find_merged_remote(git, &filter, remote, opts.effort, opts.jobs)
+                find_merged_remote(git, &filter, remote, opts.effort, opts.jobs, forge)
             })?;
             // Surfaced after the spinner: printing inside it would corrupt the
             // spinner's own line.
             for warning in &merged.warnings {
                 warn(ui, &mut report, warning);
             }
+            let pr_merged = merged.pr_merged;
             let merged = merged.candidates;
 
             if merged.is_empty() {
@@ -982,12 +1010,26 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 report.remotes.push(RemoteReport {
                     remote: remote.clone(),
                     merged: Vec::new(),
+                    pr_merged: Vec::new(),
                     branches: Vec::new(),
                 });
                 continue;
             }
 
-            let display: Vec<String> = merged.iter().map(|b| format!("{remote}/{b}")).collect();
+            let reason_of = |branch: &String| {
+                if pr_merged.contains(branch) {
+                    BranchReason::PrMerged
+                } else {
+                    BranchReason::Merged
+                }
+            };
+            let display: Vec<String> = merged
+                .iter()
+                .map(|b| match reason_of(b) {
+                    BranchReason::PrMerged => format!("{remote}/{b} (pr-merged)"),
+                    _ => format!("{remote}/{b}"),
+                })
+                .collect();
             ui.heading(&format!(
                 "Found {} merged remote branch(es) on '{remote}':",
                 merged.len()
@@ -1015,6 +1057,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 if !selected.contains(branch) {
                     entries.push(RemoteBranch {
                         branch: branch.clone(),
+                        reason: reason_of(branch),
                         status: ItemStatus::Skipped,
                     });
                     continue;
@@ -1039,6 +1082,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 };
                 entries.push(RemoteBranch {
                     branch: branch.clone(),
+                    reason: reason_of(branch),
                     status,
                 });
             }
@@ -1053,6 +1097,11 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             report.summary.remote_branches_deleted += remote_deleted;
             report.remotes.push(RemoteReport {
                 remote: remote.clone(),
+                pr_merged: merged
+                    .iter()
+                    .filter(|b| pr_merged.contains(*b))
+                    .cloned()
+                    .collect(),
                 merged,
                 branches: entries,
             });
@@ -1072,7 +1121,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
 }
 
 /// Determine which remotes to operate on.
-fn effective_remotes(git: &Git, config: &Config) -> Result<Vec<String>> {
+pub fn effective_remotes(git: &Git, config: &Config) -> Result<Vec<String>> {
     match &config.remotes {
         Some(configured) => Ok(configured.clone()),
         None => git.remotes(),
@@ -1308,6 +1357,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         }
     }
 
@@ -1328,6 +1378,7 @@ mod tests {
             min_size: Size::default(),
             show_size: false,
             jobs: TEST_JOBS,
+            forge: ForgeSetting::Off,
         }
     }
 
@@ -1403,6 +1454,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         let ui = Ui::new();
         let opts = CleanerOptions {
@@ -1421,6 +1473,7 @@ mod tests {
             min_size: Size::default(),
             show_size: false,
             jobs: TEST_JOBS,
+            forge: ForgeSetting::Off,
         };
 
         // The fetch will fail but the cleaner should not bail out.
@@ -1587,6 +1640,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         let remotes = effective_remotes(&git, &config_with)?;
         assert_eq!(remotes, vec!["origin", "upstream"]);
@@ -1600,6 +1654,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         let remotes = effective_remotes(&git, &config_without)?;
         assert!(remotes.is_empty());
@@ -2976,6 +3031,7 @@ mod tests {
             min_age: None,
             min_size: None,
             jobs: None,
+            forge: None,
         };
         let ui = Ui::new();
         let mut opts = opts_yes_skip_network();

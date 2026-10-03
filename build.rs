@@ -36,10 +36,22 @@ mod duration;
 #[allow(dead_code)]
 mod size;
 
+// `cli` names it through `crate::forge::setting`; only that leaf is compiled
+// here, not the HTTP providers around it, hence the small facade.
+#[path = "src/forge/setting.rs"]
+#[allow(dead_code)]
+pub mod forge_setting;
+
+#[allow(unused_imports)]
+mod forge {
+    pub use crate::forge_setting as setting;
+}
+
 fn main() -> io::Result<()> {
     println!("cargo:rerun-if-changed=src/cli.rs");
     println!("cargo:rerun-if-changed=src/duration.rs");
     println!("cargo:rerun-if-changed=src/size.rs");
+    println!("cargo:rerun-if-changed=src/forge/setting.rs");
     println!("cargo:rerun-if-changed=build.rs");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is always set by cargo"));

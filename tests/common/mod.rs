@@ -4,6 +4,10 @@
 //! reach `crate::test_helpers`; this module mirrors it for the binary-level
 //! tests. Helpers panic on failure rather than returning `Result`, so a broken
 //! fixture surfaces as a test failure at the exact setup step.
+//!
+//! Each test crate uses a different subset, hence the blanket `dead_code`.
+
+#![allow(dead_code)]
 
 use std::process::Command as StdCommand;
 use tempfile::TempDir;
@@ -222,4 +226,111 @@ pub fn init_repo_with_worktree_config() -> (TempDir, std::path::PathBuf, std::pa
         .unwrap();
 
     (dir, main_path, wt_path)
+}
+
+// ── Fake forge ───────────────────────────────────────────────────────
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
+
+/// One request received by a [`FakeForge`].
+#[derive(Debug, Clone)]
+pub struct Recorded {
+    pub method: String,
+    pub path: String,
+    pub authorization: Option<String>,
+    pub body: String,
+}
+
+/// A tiny HTTP server standing in for a forge API, so the real binary can be
+/// exercised without internet access. Serves from a background thread that
+/// ends with the test process.
+pub struct FakeForge {
+    /// `http://127.0.0.1:<port>`, to hand to `GIT_WIPE_FORGE_API_URL`.
+    pub url: String,
+    requests: Arc<Mutex<Vec<Recorded>>>,
+}
+
+impl FakeForge {
+    /// Start a server answering every request with `handler(request)`:
+    /// a status code and a JSON body.
+    pub fn start(handler: impl Fn(&Recorded) -> (u16, String) + Send + Sync + 'static) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let requests: Arc<Mutex<Vec<Recorded>>> = Arc::default();
+        let handler = Arc::new(handler);
+
+        let log = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let (log, handler) = (log.clone(), handler.clone());
+                std::thread::spawn(move || serve_one(stream, &log, &*handler));
+            }
+        });
+
+        Self { url, requests }
+    }
+
+    /// An address nothing listens on: connections are refused.
+    pub fn dead_url() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}", listener.local_addr().unwrap())
+    }
+
+    pub fn requests(&self) -> Vec<Recorded> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+fn serve_one(
+    stream: std::net::TcpStream,
+    log: &Mutex<Vec<Recorded>>,
+    handler: &(dyn Fn(&Recorded) -> (u16, String) + Send + Sync),
+) {
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+        return;
+    }
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or_default().to_string();
+
+    let mut length = 0usize;
+    let mut authorization = None;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            match name.trim().to_ascii_lowercase().as_str() {
+                "content-length" => length = value.trim().parse().unwrap_or(0),
+                "authorization" => authorization = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+    }
+    let mut body = vec![0u8; length];
+    reader.read_exact(&mut body).unwrap();
+
+    let recorded = Recorded {
+        method,
+        path,
+        authorization,
+        body: String::from_utf8_lossy(&body).into_owned(),
+    };
+    log.lock().unwrap().push(recorded.clone());
+
+    let (status, payload) = handler(&recorded);
+    let mut stream = stream;
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len()
+    );
+    let _ = stream.flush();
 }
