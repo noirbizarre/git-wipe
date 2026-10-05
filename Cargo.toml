@@ -5,7 +5,7 @@
 
 [package]
 name = "git-wipe"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 # The MSRV. Checked by the MSRV job in ci.yaml, which greps this very line — keep it
 # a plain literal. `rust-toolchain.toml` separately pins the channel to develop
