@@ -18,7 +18,11 @@ makedepends=('cargo')
 # crate) picks it up: its objects become GCC LTO bytecode that rustc's lld
 # linker cannot read, so the link fails with "undefined symbol: ring_core_*".
 # Rust does its own LTO (see `[profile.release]`), so nothing is lost.
-options=('!lto')
+#
+# `!debug` for the same reason as git-wipe-bin: the release profile sets
+# `strip = true`, so there is no debug data to split out, and makepkg would
+# otherwise emit an empty git-wipe-debug package.
+options=('!lto' '!debug')
 # `replaces`/`conflicts` on the pre-rename name so `pacman -Syu` migrates
 # anyone still on git-synchronizer instead of leaving both installed.
 provides=('git-synchronizer')
