@@ -14,6 +14,11 @@ license=('MIT')
 # out to it, and the test suite builds real repositories with it.
 depends=('gcc-libs' 'glibc' 'git')
 makedepends=('cargo')
+# makepkg adds `-flto=auto` to CFLAGS, and `ring`'s build script (via the `cc`
+# crate) picks it up: its objects become GCC LTO bytecode that rustc's lld
+# linker cannot read, so the link fails with "undefined symbol: ring_core_*".
+# Rust does its own LTO (see `[profile.release]`), so nothing is lost.
+options=('!lto')
 # `replaces`/`conflicts` on the pre-rename name so `pacman -Syu` migrates
 # anyone still on git-synchronizer instead of leaving both installed.
 provides=('git-synchronizer')
