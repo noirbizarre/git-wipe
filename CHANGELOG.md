@@ -11,6 +11,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 > There is no automatic configuration migration — see the README for how to
 > move an existing `[sync]` section across.
 
+## [0.6.1](https://github.com/noirbizarre/git-wipe/compare/0.6.0..0.6.1) - 2026-10-23
+
+### 🐛 Bug Fixes
+
+- **packaging** Make the AUR source package build ([#104](https://github.com/noirbizarre/git-wipe/issues/104)) - ([5c7a466](https://github.com/noirbizarre/git-wipe/commit/5c7a4664941430d966cf7aaabc46c0754180d3a1))
+
 ## [0.6.0](https://github.com/noirbizarre/git-wipe/compare/0.5.0..0.6.0) - 2026-10-22
 
 ### 💫 Features
