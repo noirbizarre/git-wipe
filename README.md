@@ -775,7 +775,7 @@ flowchart TD
     FindLocal --> PatchID["Patch-ID matching\ngit patch-id\n(effort 3)"]
     FindLocal --> SimMerge["Simulated merge\ngit merge-tree --write-tree\n(effort 3)"]
     FindLocal --> Squash["Squash-merge detection\ncombined patch-id\n(effort 3)"]
-    FindLocal --> GoneUpstream[Deleted-upstream detection\nrequires a fetch (or --dry-run)]
+    FindLocal --> GoneUpstream["Deleted-upstream detection\nrequires a fetch (or --dry-run)"]
     FindLocal --> Orphans[Find orphan worktrees]
     ForgeAsk --> SelectLocal
     Merged --> SelectLocal[Unified multiselect:\nbranches + worktrees]
