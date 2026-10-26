@@ -23,6 +23,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # Tools use different credential names; keep API calls off the anonymous budget.
+  GH_TOKEN: ${{ github.token }}
+  GITHUB_TOKEN: ${{ github.token }}
+  MISE_GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   aur:
     name: 📦 ${{ matrix.pkg }}
@@ -64,7 +70,6 @@ jobs:
 
       - name: Render the PKGBUILD
         env:
-          GH_TOKEN: ${{ github.token }}
           PKG: ${{ matrix.pkg }}
         run: |
           set -euo pipefail

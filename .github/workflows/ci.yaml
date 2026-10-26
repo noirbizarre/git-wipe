@@ -17,11 +17,15 @@ defaults:
     shell: bash
 
 env:
+  # Tools use different credential names; action-local auth does not cover later steps.
+  GH_TOKEN: ${{ github.token }}
+  GITHUB_TOKEN: ${{ github.token }}
+  MISE_GITHUB_TOKEN: ${{ github.token }}
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
 
-  # sccache caches individual objects, so a Cargo.lock bump doesn't force a full rebuild the way rust-cache's key does.
-  RUSTC_WRAPPER: sccache
+  # A running cache server may disappear; compilation must still work without it.
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
   # Incremental compilation's on-disk state can't be reused by sccache, so the two are mutually exclusive.
   CARGO_INCREMENTAL: "0"
   # Backs sccache with GitHub's own Actions cache instead of a separate cloud bucket and its credentials.
@@ -42,6 +46,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Verify compiler cache fallback
+        run: python3 .github/scripts/test_start_sccache.py
+
       # The channel comes from the action ref, not rust-toolchain.toml,
       # and each job installs the components it needs.
       - uses: dtolnay/rust-toolchain@stable
@@ -53,6 +60,12 @@ jobs:
       - uses: rui314/setup-mold@v1
 
       - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          # Its post step otherwise fails when cache startup is unavailable.
+          disable_annotations: true
+
+      - name: Start compiler cache (with uncached fallback)
+        run: bash .github/scripts/start-sccache.sh
 
       # Tool versions come from mise.toml + mise.lock, so CI runs exactly
       # what `mise run default` runs locally. No pinned mise version: an
@@ -67,6 +80,12 @@ jobs:
       # rather than a parallel set of checks that happens to agree.
       - name: Run hooks
         run: prek run --all-files --show-diff-on-failure
+
+      - name: Compiler cache statistics
+        if: always() && env.RUSTC_WRAPPER == 'sccache'
+        # Cache observability must not turn a successful build into a failure.
+        continue-on-error: true
+        run: sccache --show-stats
 
   test:
     name: 🧪 Tests (${{ matrix.os.name }})
@@ -97,6 +116,11 @@ jobs:
         uses: rui314/setup-mold@v1
 
       - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          disable_annotations: true
+
+      - name: Start compiler cache (with uncached fallback)
+        run: bash .github/scripts/start-sccache.sh
 
       # nextest and llvm-cov are pinned by mise.lock rather than resolved
       # per-run, so a tool release cannot change CI behaviour on its own.
@@ -136,14 +160,17 @@ jobs:
           directory: target/nextest/ci
           report_type: test_results
 
+      - name: Compiler cache statistics
+        if: always() && env.RUSTC_WRAPPER == 'sccache'
+        continue-on-error: true
+        run: sccache --show-stats
+
   # gh-ship runs the release. Its configuration and the workflows it names must
   # satisfy the contract it enforces, and finding out otherwise mid-release is
   # the worst possible moment — so it is checked on every pull request instead.
   ship:
     name: 🚢 Ship setup
     runs-on: ubuntu-latest
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
@@ -177,9 +204,19 @@ jobs:
       - uses: rui314/setup-mold@v1
 
       - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          disable_annotations: true
+
+      - name: Start compiler cache (with uncached fallback)
+        run: bash .github/scripts/start-sccache.sh
 
       # `check`, not `test`: dev-dependencies routinely require a newer
       # toolchain than the crate itself, and the MSRV is a promise about
       # consuming the library, not about developing it.
       - name: Check
         run: cargo check --all-targets
+
+      - name: Compiler cache statistics
+        if: always() && env.RUSTC_WRAPPER == 'sccache'
+        continue-on-error: true
+        run: sccache --show-stats

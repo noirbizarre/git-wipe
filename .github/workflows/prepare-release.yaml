@@ -16,11 +16,16 @@ on:
         type: boolean
         default: false
 
-# Every API call in this workflow — the push, and git-cliff's metadata reads —
-# authenticates as the GitHub App, whose installation permissions apply instead
-# of these. These cover `actions/checkout` alone, which only reads.
+# Release mutations and git-cliff metadata reads use the App's permissions.
+# mise tool installation uses the read-only workflow token.
 permissions:
   contents: read
+
+env:
+  # Tools use different credential names; release steps override these with the App token.
+  GH_TOKEN: ${{ github.token }}
+  GITHUB_TOKEN: ${{ github.token }}
+  MISE_GITHUB_TOKEN: ${{ github.token }}
 
 jobs:
   prepare:

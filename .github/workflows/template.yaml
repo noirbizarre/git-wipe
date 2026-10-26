@@ -17,6 +17,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # Tools use different credential names; action-local auth does not cover later steps.
+  GH_TOKEN: ${{ github.token }}
+  GITHUB_TOKEN: ${{ github.token }}
+  MISE_GITHUB_TOKEN: ${{ github.token }}
+
 defaults:
   run:
     shell: bash

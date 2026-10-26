@@ -23,6 +23,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # Default tool authentication; the tap push keeps its dedicated token.
+  GH_TOKEN: ${{ github.token }}
+  GITHUB_TOKEN: ${{ github.token }}
+  MISE_GITHUB_TOKEN: ${{ github.token }}
+
 jobs:
   homebrew:
     name: 🍺 Formula
@@ -46,8 +52,6 @@ jobs:
           persist-credentials: false
 
       - name: Render the formula
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p build assets

@@ -26,6 +26,10 @@ permissions:
   contents: read
 
 env:
+  # Tools use different credential names; privileged uploads keep their step-local token.
+  GH_TOKEN: ${{ github.token }}
+  GITHUB_TOKEN: ${{ github.token }}
+  MISE_GITHUB_TOKEN: ${{ github.token }}
   CARGO_TERM_COLOR: always
   # Retries against a flaky registry/network rather than failing a release
   # build outright, and no incremental cache — this is a one-shot build, so

@@ -22,6 +22,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # Default tool authentication; gh-ship steps explicitly select the App token.
+  GH_TOKEN: ${{ github.token }}
+  GITHUB_TOKEN: ${{ github.token }}
+  MISE_GITHUB_TOKEN: ${{ github.token }}
+
 # One release action at a time. Merging the Release PR fires *both* triggers —
 # the merge is also a push to main — and this queue is what keeps them from
 # interleaving. Either order is correct: if prepare runs first its
