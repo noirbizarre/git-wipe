@@ -7,31 +7,34 @@
 //!
 //! Three layers, from the outside in:
 //!
-//! - [`ForgeSource`] is what merge detection depends on: given the branches of
-//!   a remote and their tips, which have a merged pull/merge request? It knows
+//! - [`ForgeSource`] is what merge detection depends on: given a repository and
+//!   candidate tips, which branches have a merged pull/merge request? It knows
 //!   nothing of providers or transports, so detection is tested with fakes.
 //! - [`RemoteForges`] implements it for a real repository: one provider per
-//!   remote, picked from the remote URL, with the answers cached so a branch is
-//!   never asked about twice in a run.
+//!   selected repository, picked from a remote name or URL, with answers cached
+//!   so a branch is never asked about twice in a run.
 //! - [`Forge`] is the provider abstraction: [`github`] and [`gitlab`] speak
 //!   GraphQL, [`gitea`] (Gitea and Forgejo) speaks REST. All share one HTTP
 //!   client; none shells out to a forge CLI.
 //!
-//! Nothing here is ever fatal. A forge that cannot be reached, or does not
-//! recognise the project, surfaces as a [`ForgeOutcome`] the caller turns into
-//! a warning before carrying on with git alone.
+//! Invalid explicit selections fail before any queries. A forge that cannot be
+//! reached, or does not recognise the project, surfaces as a [`ForgeOutcome`]
+//! the caller turns into a warning before carrying on with git alone.
 
 mod gitea;
 mod github;
 mod gitlab;
 mod http;
+mod selection;
 pub mod setting;
 mod url;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+pub use selection::select_repositories;
 pub use setting::{ForgeKind, ForgeSetting};
 pub use url::RemoteUrl;
 
@@ -189,12 +192,19 @@ pub enum ForgeOutcome {
     Unsupported(String),
     /// The forge could not be consulted. Worth a warning, then git alone.
     Unavailable(ForgeError),
+    /// An earlier call failed and already warned; no verdict or new warning.
+    PreviouslyUnavailable,
 }
 
 /// What merge detection asks of the forge.
 pub trait ForgeSource: Sync {
-    /// The remotes the forge may be asked about.
+    /// Selected repository labels (remote names or literal URLs).
     fn remotes(&self) -> &[String];
+
+    /// Avoid repeating selection warnings when local and remote scans share a source.
+    fn take_selection_warning(&self) -> bool {
+        true
+    }
 
     /// Among `tips` (branch name to tip commit), the branches of `remote`
     /// whose pull/merge request was merged at that very commit.
@@ -218,20 +228,27 @@ enum Slot {
     Failed,
 }
 
-/// The forges behind the remotes of a repository.
+/// The selected destination repositories, with one cached provider per selection.
 pub struct RemoteForges {
     remotes: Vec<String>,
     slots: Mutex<HashMap<String, Slot>>,
+    selection_warned: AtomicBool,
 }
 
 impl RemoteForges {
-    /// Identify the forge of each of `remotes`. Never fails and never touches
-    /// the network: a remote that cannot be identified is just unsupported.
+    /// Connect selected remote names or URLs after [`select_repositories`]
+    /// resolves and deduplicates them. No network access happens yet.
     pub fn new(git: &Git, setting: ForgeSetting, remotes: Vec<String>) -> Self {
         let slots = remotes
             .iter()
             .map(|remote| {
-                let slot = match git.remote_url(remote) {
+                // Literal URLs allow querying a destination without adding a Git remote.
+                let url = if RemoteUrl::parse(remote).is_some() {
+                    Ok(remote.clone())
+                } else {
+                    git.remote_url(remote)
+                };
+                let slot = match url {
                     Err(_) => {
                         Slot::Unsupported(format!("cannot read the URL of remote '{remote}'"))
                     }
@@ -250,6 +267,7 @@ impl RemoteForges {
         Self {
             remotes,
             slots: Mutex::new(slots),
+            selection_warned: AtomicBool::new(false),
         }
     }
 }
@@ -257,6 +275,10 @@ impl RemoteForges {
 impl ForgeSource for RemoteForges {
     fn remotes(&self) -> &[String] {
         &self.remotes
+    }
+
+    fn take_selection_warning(&self) -> bool {
+        !self.selection_warned.swap(true, Ordering::Relaxed)
     }
 
     fn pr_merged(&self, remote: &str, tips: &HashMap<String, String>) -> ForgeOutcome {
@@ -267,7 +289,7 @@ impl ForgeSource for RemoteForges {
 
         let failure = match slot {
             Slot::Unsupported(reason) => return ForgeOutcome::Unsupported(reason.clone()),
-            Slot::Failed => return ForgeOutcome::Resolved(HashSet::new()),
+            Slot::Failed => return ForgeOutcome::PreviouslyUnavailable,
             Slot::Ready {
                 forge,
                 heads,
@@ -354,6 +376,7 @@ mod tests {
         RemoteForges {
             remotes: vec!["origin".to_string(), "odd".to_string()],
             slots: Mutex::new(slots),
+            selection_warned: AtomicBool::new(false),
         }
     }
 
@@ -413,6 +436,7 @@ mod tests {
             },
         );
         let forges = RemoteForges {
+            selection_warned: AtomicBool::new(false),
             remotes: vec!["origin".to_string()],
             slots: Mutex::new(slots),
         };
@@ -438,7 +462,7 @@ mod tests {
         assert_eq!(error.message, "Fake o/r: timed out");
         assert!(matches!(
             forges.pr_merged("origin", &t),
-            ForgeOutcome::Resolved(s) if s.is_empty()
+            ForgeOutcome::PreviouslyUnavailable
         ));
     }
 

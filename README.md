@@ -414,6 +414,7 @@ to the repository-local `.git/config`:
 | `protected` | multi-value | Glob patterns for branches that should never be deleted |
 | `ignore` | multi-value | Glob patterns for branches git-wipe ignores entirely |
 | `remote` | multi-value | Remotes to delete branches from (omit for all remotes) |
+| `forgeRepo` | multi-value | Remote names or repository URLs to query for merged requests. Omit to infer from protected branches' tracking remotes; repeat `--forge-repo` to override the list |
 | `worktrunk` | bool (`true`/`false`, `yes`/`no`, `on`/`off`, `1`/`0`) | Enable/disable [worktrunk](https://worktrunk.dev) for worktree removal. When omitted, auto-detects (see below) |
 | `effort` | `1`-`3` | How thorough merge detection should be. Defaults to `2`; `--effort` overrides it |
 | `minage` | duration | Minimum age a worktree must have before it may be removed, e.g. `30s`, `2h`, `7d`. Defaults to `0s` (no guard); `--min-age` overrides it |
@@ -504,11 +505,42 @@ git wipe --no-forge
 | Gitea | hosts containing `gitea` | REST |
 | Forgejo, Codeberg | `codeberg.org`, hosts containing `forgejo` | REST |
 
-The forge is identified from each remote's URL (https, `ssh://` and `user@host:path`
-forms), with no network access. A remote whose host is not recognised is simply
-skipped unless `wipe.forge` names a kind. All remotes in `wipe.remote` (or all
-remotes) are consulted, each with its own forge. git-wipe speaks to the forge
-API itself: no `gh`, `glab` or any other CLI is needed.
+By default, git-wipe queries the repositories tracked by your **protected local
+branches**. For example, if protected `main` tracks `upstream/main`, PRs/MRs are
+looked up in `upstream`, even when feature branches live on your fork at
+`origin`. Several protected branches can select several repositories; duplicate
+repositories are queried only once. Ignored branches do not contribute targets.
+Tracking configuration is enough; a missing remote-tracking ref does not prevent
+selection.
+
+If no protected branch tracks a supported forge remote, git-wipe selects the
+first supported remote in this order: `upstream`, `origin`, then other remote
+names alphabetically. This selection is independent of `wipe.remote`, which
+controls cleanup remotes. Remote branches on a fork can be confirmed merged by
+the upstream forge, while deletion still targets the fork.
+
+Override inference with remote names or repository URLs (https, `ssh://` and
+`user@host:path` forms):
+
+```sh
+# One or several destinations for one run (also supported by status)
+git wipe --forge --forge-repo upstream --forge-repo https://github.com/team/other.git
+git wipe status --forge --forge-repo https://gitlab.com/group/subgroup/project.git
+
+# Persist a list; set replaces the list, add/remove edit individual entries
+git wipe config set forgeRepo upstream
+git wipe config add-forge-repo https://gitlab.com/group/project.git
+git wipe config remove-forge-repo https://gitlab.com/group/project.git
+```
+
+A CLI selector list replaces the entire configured list. Selectors alone do not
+enable forge access, and `--no-forge` disables it as usual. Invalid explicit
+selectors are reported as configuration errors; they do not trigger inference.
+
+The forge is identified from each selected repository URL without network
+access. An unrecognised host needs `wipe.forge` or `--forge=<kind>` to name its
+provider. git-wipe speaks to the forge API itself: no `gh`, `glab` or any other
+CLI is needed.
 
 **It is networked, and opt-in.** Enabling it sends the names of your candidate
 branches (never protected or ignored ones, nor the current branch) to the
@@ -531,15 +563,15 @@ variables.
 the branch's current tip.** A branch name reused after a merge, or advanced
 since, is not reported, and git judges it as usual.
 
-**The forge never makes a run fail.** Whatever it cannot answer is left to the
+**Forge API failures never make a run fail.** Whatever it cannot answer is left to the
 offline strategies, which behave exactly as without `--forge`:
 
 - *Resolved*: the request was merged at the tip; the branch is `pr-merged`.
 - *Not found*: no merged request, or one ending elsewhere; git decides.
-- *Unsupported*: the host is not recognised, or there is no remote; git
-  decides, with one warning if no remote could be asked at all.
+- *Unsupported*: no usable repository can be inferred; git decides, with one
+  warning suggesting an explicit selector.
 - *Unavailable*: network error, rejected or missing credentials, timeout (5s to
-  connect, 20s per request), server error; one warning per remote naming the
+  connect, 20s per request), server error; one warning per repository naming the
   cause, then git decides.
 
 Requests are batched (about 40 branches per GitHub request, 50 per GitLab

@@ -176,7 +176,10 @@ fn short_cause(err: &anyhow::Error) -> String {
 /// Multi-valued keys cannot be written with a plain `git config <key> <value>`
 /// once they hold more than one entry.
 fn is_multi_valued(key: &str) -> bool {
-    matches!(key, "protected" | "ignore" | "remote")
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "protected" | "ignore" | "remote" | "forgerepo"
+    )
 }
 
 fn handle_config_command(
@@ -288,6 +291,13 @@ fn handle_config_command(
                             Some(forge::ForgeSetting::Kind(kind)) => format!("enabled ({kind})"),
                         },
                     );
+                    ui.field(
+                        "forge repositories",
+                        &cfg.forge_repos
+                            .as_ref()
+                            .map(|repositories| repositories.join(", "))
+                            .unwrap_or_else(|| "(inferred from protected branches)".to_string()),
+                    );
                 }
                 None => {
                     ui.muted("No configuration found. Run `git wipe` to start the setup wizard.");
@@ -361,6 +371,19 @@ fn handle_config_command(
             Ok(())
         }
 
+        ConfigAction::AddForgeRepo { repository } => {
+            config::validate_value("forgeRepo", &repository)?;
+            git.config_add(&format!("{}.forgeRepo", config::SECTION), &repository)?;
+            ui.success(&format!("Added forge repository: {repository}"));
+            Ok(())
+        }
+
+        ConfigAction::RemoveForgeRepo { repository } => {
+            git.config_remove_value(&format!("{}.forgeRepo", config::SECTION), &repository)?;
+            ui.success(&format!("Removed forge repository: {repository}"));
+            Ok(())
+        }
+
         ConfigAction::Protect { branch } => {
             git.set_branch_protected(&branch, true)?;
             ui.success(&format!(
@@ -426,6 +449,7 @@ fn list_config_json(git: &git::Git) -> Result<()> {
         jobs: cfg.as_ref().and_then(|c| c.jobs),
         worktrunk: cfg.as_ref().and_then(|c| c.worktrunk),
         forge: cfg.as_ref().and_then(|c| c.forge),
+        forge_repos: cfg.as_ref().and_then(|c| c.forge_repos.clone()),
     };
     report::print_json(&report)
 }
@@ -456,7 +480,9 @@ fn handle_status(git: &git::Git, ui: &ui::Ui, cli: &Cli, merged_only: bool) -> R
     let forges = opts
         .forge
         .is_enabled()
-        .then(|| cleaner::effective_remotes(git, &cfg))
+        .then(|| {
+            forge::select_repositories(git, &filter, opts.forge, resolve_forge_repos(cli, &cfg))
+        })
         .transpose()?
         .map(|remotes| forge::RemoteForges::new(git, opts.forge, remotes));
     let forge = forges.as_ref().map(|f| f as &dyn forge::ForgeSource);
@@ -509,6 +535,7 @@ fn handle_clean(git: &git::Git, ui: &ui::Ui, cli: &Cli) -> Result<()> {
         show_size: cli.size,
         jobs,
         forge: resolve_forge(cli, &cfg),
+        forge_repos: resolve_forge_repos(cli, &cfg).map(<[String]>::to_vec),
     };
 
     let report = cleaner::run(git, &cfg, ui, &opts)?;
@@ -540,6 +567,15 @@ fn resolve_forge(cli: &Cli, cfg: &config::Config) -> forge::ForgeSetting {
         return forge::ForgeSetting::Off;
     }
     cli.forge.or(cfg.forge).unwrap_or_default()
+}
+
+/// CLI selectors replace the entire configured list, rather than extending it.
+fn resolve_forge_repos<'a>(cli: &'a Cli, cfg: &'a config::Config) -> Option<&'a [String]> {
+    if cli.forge_repo.is_empty() {
+        cfg.forge_repos.as_deref()
+    } else {
+        Some(&cli.forge_repo)
+    }
 }
 
 /// Resolve the minimum age a worktree must have before it may be removed.

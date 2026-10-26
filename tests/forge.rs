@@ -89,15 +89,20 @@ impl Run {
 /// Run `git wipe --json --dry-run --no-fetch --no-pull --local-only <args>`
 /// against `api`, with exactly the credentials in `env`.
 fn wipe(dir: &Path, api: &str, env: &[(&str, &str)], args: &[&str]) -> Run {
+    wipe_scope(dir, api, env, args, Some("--local-only"))
+}
+
+fn wipe_scope(
+    dir: &Path,
+    api: &str,
+    env: &[(&str, &str)],
+    args: &[&str],
+    scope: Option<&str>,
+) -> Run {
     let mut cmd = Command::cargo_bin("git-wipe").unwrap();
     cmd.current_dir(dir)
-        .args([
-            "--json",
-            "--dry-run",
-            "--no-fetch",
-            "--no-pull",
-            "--local-only",
-        ])
+        .args(["--json", "--dry-run", "--no-fetch", "--no-pull"])
+        .args(scope)
         .args(args)
         .env("GIT_WIPE_FORGE_API_URL", api);
     for var in [
@@ -361,8 +366,11 @@ fn an_unrecognised_host_warns_once_and_falls_back() {
     assert!(run.success, "{}", run.stderr);
     let warnings = run.warnings();
     assert_eq!(warnings.len(), 1, "{warnings:?}");
-    assert!(warnings[0].contains("git.example.com"), "{warnings:?}");
-    assert!(warnings[0].contains("wipe.forge"), "{warnings:?}");
+    assert!(
+        warnings[0].contains("no supported repository"),
+        "{warnings:?}"
+    );
+    assert!(warnings[0].contains("--forge-repo"), "{warnings:?}");
     assert!(forge.requests().is_empty());
     assert_eq!(run.reason("feature/done").as_deref(), Some("merged"));
 }
@@ -658,4 +666,341 @@ fn forge_flag_is_documented_as_networked_and_opt_in() {
     assert!(help.contains("--no-forge"), "{help}");
     assert!(help.contains("networked"), "{help}");
     assert!(help.contains("GITHUB_TOKEN"), "{help}");
+}
+
+// ── Destination repositories, independent of fork cleanup remotes ─────
+
+#[test]
+fn protected_tracking_selects_the_parent_project_for_github_and_gitlab() {
+    for host in ["github.com", "gitlab.com"] {
+        let dir = repo(&format!("https://{host}/user/fork.git"));
+        let p = dir.path();
+        let project = if host == "github.com" {
+            "team/project"
+        } else {
+            "team/sub/project"
+        };
+        git(
+            p,
+            &[
+                "remote",
+                "add",
+                "parent",
+                &format!("git@{host}:{project}.git"),
+            ],
+        );
+        git(p, &["config", "branch.main.remote", "parent"]);
+        git(p, &["config", "branch.main.merge", "refs/heads/trunk"]);
+        // Only the fork is selected for cleanup; no parent tracking ref exists.
+        git(p, &["config", "wipe.remote", "origin"]);
+        let head = tip(p, AMENDED);
+        let gh = github(vec![(AMENDED, head.clone())]);
+        let forge = FakeForge::start(move |request| {
+            let body: Value = serde_json::from_str(&request.body).unwrap();
+            if host == "github.com" {
+                assert_eq!(body["variables"]["owner"], "team");
+                assert_eq!(body["variables"]["name"], "project");
+                gh(request)
+            } else {
+                assert_eq!(body["variables"]["path"], "team/sub/project");
+                (
+                    200,
+                    json!({"data": {"project": {"mergeRequests": {
+                        "nodes": [{"sourceBranch": AMENDED, "diffHeadSha": head}],
+                        "pageInfo": {"hasNextPage": false, "endCursor": null}
+                    }}}})
+                    .to_string(),
+                )
+            }
+        });
+        let run = wipe(p, &forge.url, TOKEN, &["--forge"]);
+        assert!(run.success, "{host}: {:?}", run.json);
+        assert_eq!(run.reason(AMENDED).as_deref(), Some("pr-merged"), "{host}");
+        let status = wipe_status(p, &forge.url, &["--forge"]);
+        assert!(status["entries"].as_array().unwrap().iter().any(|entry| {
+            entry["branch"] == AMENDED
+                && entry["status"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("pr-merged"))
+        }));
+        assert_eq!(forge.requests().len(), 2, "{host}");
+
+        // Remote evidence must be checked against the fork's tip, not the local tip.
+        git(
+            p,
+            &[
+                "update-ref",
+                &format!("refs/remotes/origin/{AMENDED}"),
+                &tip(p, AMENDED),
+            ],
+        );
+        git(
+            p,
+            &["update-ref", "refs/remotes/origin/main", &tip(p, "main")],
+        );
+        let run = wipe_scope(p, &forge.url, TOKEN, &["--forge"], Some("--remote-only"));
+        assert!(run.success, "{host}: {:?}", run.json);
+        assert_eq!(run.json["remotes"].as_array().unwrap().len(), 1);
+        assert_eq!(run.json["remotes"][0]["remote"], "origin");
+        assert_eq!(run.json["remotes"][0]["pr_merged"], json!([AMENDED]));
+        git(
+            p,
+            &[
+                "update-ref",
+                &format!("refs/remotes/origin/{AMENDED}"),
+                &tip(p, "feature/wip"),
+            ],
+        );
+        let run = wipe_scope(p, &forge.url, TOKEN, &["--forge"], Some("--remote-only"));
+        assert!(run.success);
+        assert_eq!(run.json["remotes"][0]["pr_merged"], json!([]), "{host}");
+    }
+}
+
+#[test]
+fn repeated_cli_repositories_replace_config_and_union_answers_from_multiple_projects() {
+    let dir = repo("https://github.com/user/fork.git");
+    let p = dir.path();
+    git(p, &["config", "wipe.forgeRepo", "origin"]);
+    git(
+        p,
+        &["remote", "add", "parent", "git@github.com:team/first.git"],
+    );
+    let answer = github(vec![(AMENDED, tip(p, AMENDED))]);
+    let first = github(vec![("feature/wip", tip(p, "feature/wip"))]);
+    let forge = FakeForge::start(move |request| {
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+        assert_eq!(body["variables"]["owner"], "team");
+        match body["variables"]["name"].as_str().unwrap() {
+            "first" => first(request),
+            "second" => answer(request),
+            other => panic!("unexpected project {other}"),
+        }
+    });
+    let run = wipe(
+        p,
+        &forge.url,
+        TOKEN,
+        &[
+            "--forge",
+            "--forge-repo",
+            "parent",
+            "--forge-repo",
+            "https://github.com/team/second.git",
+            "--forge-repo",
+            "ssh://git@github.com/team/first.git",
+        ],
+    );
+    assert!(run.success, "{:?}", run.json);
+    assert_eq!(run.reason(AMENDED).as_deref(), Some("pr-merged"));
+    assert_eq!(run.reason("feature/wip").as_deref(), Some("pr-merged"));
+    assert_eq!(
+        forge.requests().len(),
+        2,
+        "alias must share the first repository's cache"
+    );
+}
+
+#[test]
+fn explicit_repository_urls_work_without_git_remotes_and_are_global_flags() {
+    let dir = repo("https://github.com/user/fork.git");
+    git(dir.path(), &["remote", "remove", "origin"]);
+    let forge = FakeForge::start(github(vec![(AMENDED, tip(dir.path(), AMENDED))]));
+    let output = Command::cargo_bin("git-wipe")
+        .unwrap()
+        .current_dir(dir.path())
+        .args([
+            "--forge-repo",
+            "https://github.com/team/project",
+            "--forge",
+            "status",
+            "--json",
+        ])
+        .env("GITHUB_TOKEN", "test")
+        .env("GIT_WIPE_FORGE_API_URL", &forge.url)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(status["entries"].to_string().contains("pr-merged"));
+    let status = wipe_status(
+        dir.path(),
+        &forge.url,
+        &["--forge", "--forge-repo", "https://github.com/team/project"],
+    );
+    assert!(status["entries"].to_string().contains("pr-merged"));
+}
+
+#[test]
+fn invalid_explicit_selection_is_actionable_and_sends_no_partial_queries() {
+    let dir = repo("https://github.com/user/fork.git");
+    let forge = FakeForge::start(github(vec![]));
+    let run = wipe(
+        dir.path(),
+        &forge.url,
+        TOKEN,
+        &[
+            "--forge",
+            "--forge-repo",
+            "origin",
+            "--forge-repo",
+            "missing",
+        ],
+    );
+    assert!(!run.success);
+    let error = run.json.to_string();
+    assert!(error.contains("missing"), "{error}");
+    assert!(error.contains("--forge-repo"), "{error}");
+    assert!(forge.requests().is_empty());
+    for args in [
+        vec!["--forge-repo", "missing"],
+        vec!["--forge", "--no-forge", "--forge-repo", "missing"],
+    ] {
+        let run = wipe(dir.path(), &forge.url, TOKEN, &args);
+        assert!(run.success, "{:?}", run.json);
+    }
+    assert!(forge.requests().is_empty());
+}
+
+#[test]
+fn configured_repository_lists_can_be_edited_replaced_and_used_for_detection() {
+    let dir = repo("https://github.com/user/fork.git");
+    let p = dir.path();
+    let config = |args: &[&str]| {
+        Command::cargo_bin("git-wipe")
+            .unwrap()
+            .current_dir(p)
+            .arg("config")
+            .args(args)
+            .assert()
+            .success();
+    };
+    config(&["add-forge-repo", "origin"]);
+    config(&["add-forge-repo", "https://github.com/team/project.git"]);
+    config(&["remove-forge-repo", "origin"]);
+    let forge = FakeForge::start(github(vec![(AMENDED, tip(p, AMENDED))]));
+    let run = wipe(p, &forge.url, TOKEN, &["--forge"]);
+    assert_eq!(run.reason(AMENDED).as_deref(), Some("pr-merged"));
+    let body: Value = serde_json::from_str(&forge.requests()[0].body).unwrap();
+    assert_eq!(body["variables"]["owner"], "team");
+    config(&["add-forge-repo", "origin"]);
+    config(&["set", "forgerepo", "origin"]);
+    assert_eq!(git(p, &["config", "--get-all", "wipe.forgeRepo"]), "origin");
+    let output = Command::cargo_bin("git-wipe")
+        .unwrap()
+        .current_dir(p)
+        .args(["config", "list", "--json"])
+        .output()
+        .unwrap();
+    let listing: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(listing["forge_repos"], json!(["origin"]));
+    config(&["set", "forgeRepo", "https://github.com/team/project"]);
+    assert_eq!(
+        git(p, &["config", "--get-all", "wipe.forgeRepo"]),
+        "https://github.com/team/project"
+    );
+}
+
+#[test]
+fn a_shared_destination_cache_still_checks_each_candidate_namespaces_tip() {
+    let dir = repo("https://github.com/user/fork.git");
+    let p = dir.path();
+    git(
+        p,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/team/project.git",
+        ],
+    );
+    git(p, &["config", "wipe.remote", "origin"]);
+    git(
+        p,
+        &[
+            "update-ref",
+            &format!("refs/remotes/origin/{AMENDED}"),
+            &tip(p, "feature/wip"),
+        ],
+    );
+    git(
+        p,
+        &["update-ref", "refs/remotes/origin/main", &tip(p, "main")],
+    );
+    let forge = FakeForge::start(github(vec![(AMENDED, tip(p, AMENDED))]));
+    let run = wipe_scope(p, &forge.url, TOKEN, &["--forge"], None);
+    assert!(run.success, "{:?}", run.json);
+    assert_eq!(run.reason(AMENDED).as_deref(), Some("pr-merged"));
+    assert_eq!(run.json["remotes"][0]["pr_merged"], json!([]));
+    assert_eq!(
+        forge.requests().len(),
+        1,
+        "local and remote scans share repository answers"
+    );
+}
+
+#[test]
+fn missing_destinations_warn_once_even_when_only_remote_branches_are_scanned() {
+    let dir = repo("https://unknown.example/user/fork.git");
+    let p = dir.path();
+    git(
+        p,
+        &[
+            "update-ref",
+            &format!("refs/remotes/origin/{AMENDED}"),
+            &tip(p, AMENDED),
+        ],
+    );
+    git(
+        p,
+        &["update-ref", "refs/remotes/origin/main", &tip(p, "main")],
+    );
+    let forge = FakeForge::start(github(vec![]));
+    for scope in [None, Some("--remote-only")] {
+        let run = wipe_scope(p, &forge.url, TOKEN, &["--forge"], scope);
+        assert!(run.success, "{:?}", run.json);
+        assert_eq!(run.warnings().len(), 1, "{:?}", run.json);
+        assert!(run.warnings()[0].contains("--forge-repo"));
+    }
+    assert!(forge.requests().is_empty());
+}
+
+#[test]
+fn shared_destination_failures_warn_once_across_local_and_remote_scans() {
+    let dir = repo("https://github.com/user/fork.git");
+    let p = dir.path();
+    git(
+        p,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/team/project.git",
+        ],
+    );
+    git(p, &["config", "wipe.remote", "origin"]);
+    git(
+        p,
+        &[
+            "update-ref",
+            &format!("refs/remotes/origin/{AMENDED}"),
+            &tip(p, AMENDED),
+        ],
+    );
+    git(
+        p,
+        &["update-ref", "refs/remotes/origin/main", &tip(p, "main")],
+    );
+    let forge = FakeForge::start(|_| (503, "unavailable".into()));
+    let run = wipe_scope(p, &forge.url, TOKEN, &["--forge"], None);
+    assert!(run.success, "{:?}", run.json);
+    assert_eq!(run.reason(AMENDED), None);
+    assert_eq!(run.warnings().len(), 1, "{:?}", run.json);
+    assert!(run.warnings()[0].contains("team/project"));
+    assert_eq!(forge.requests().len(), 1);
 }
