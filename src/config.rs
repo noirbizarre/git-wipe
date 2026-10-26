@@ -61,8 +61,20 @@ fn parse_bool(input: &str) -> Result<bool> {
 /// instead of making every later command fail with "invalid wipe.<key>".
 /// Unknown keys are refused too: they would be written and then ignored.
 pub fn validate_value(key: &str, value: &str) -> Result<()> {
-    match key {
+    match key.to_ascii_lowercase().as_str() {
         "protected" | "ignore" | "remote" => {}
+        "forgerepo" => {
+            anyhow::ensure!(
+                !value.trim().is_empty() && !value.chars().any(char::is_whitespace),
+                "use a non-empty remote name or repository URL without whitespace"
+            );
+            if value.contains(':') {
+                anyhow::ensure!(
+                    forge::RemoteUrl::parse(value).is_some(),
+                    "use a remote name or a forge repository URL"
+                );
+            }
+        }
         "worktrunk" => {
             parse_bool(value)?;
         }
@@ -83,7 +95,7 @@ pub fn validate_value(key: &str, value: &str) -> Result<()> {
         }
         _ => anyhow::bail!(
             "unknown key '{key}', expected one of: protected, ignore, remote, worktrunk, \
-             effort, minage, minsize, jobs, forge"
+             effort, minage, minsize, jobs, forge, forgeRepo"
         ),
     }
     Ok(())
@@ -118,6 +130,8 @@ pub struct Config {
     /// Whether to ask the forge about merged pull/merge requests first.
     /// `None` means off.
     pub forge: Option<ForgeSetting>,
+    /// Explicit destination repositories; absent means infer from protection.
+    pub forge_repos: Option<Vec<String>>,
 }
 
 /// A conventional starting point: `main` and `master` protected.
@@ -139,6 +153,7 @@ impl Default for Config {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         }
     }
 }
@@ -198,6 +213,9 @@ impl Config {
             .transpose()
             .with_context(|| format!("invalid {SECTION}.forge in git config"))?;
 
+        let forge_repos = git.config_get_all(&format!("{SECTION}.forgeRepo"))?;
+        let forge_repos = (!forge_repos.is_empty()).then_some(forge_repos);
+
         Ok(Some(Self {
             protected,
             ignore,
@@ -208,11 +226,18 @@ impl Config {
             min_size,
             jobs,
             forge,
+            forge_repos,
         }))
     }
 
     /// Persist configuration to the `[wipe]` git config section.
     pub fn save(&self, git: &Git) -> Result<()> {
+        git.config_unset_all(&format!("{SECTION}.forgeRepo"))?;
+        if let Some(repositories) = &self.forge_repos {
+            for repository in repositories {
+                git.config_add(&format!("{SECTION}.forgeRepo"), repository)?;
+            }
+        }
         // Protected branches (multi-value)
         git.config_unset_all(&format!("{SECTION}.protected"))?;
         for pattern in &self.protected {
@@ -430,6 +455,8 @@ impl Config {
             min_size: existing.as_ref().and_then(|c| c.min_size),
             jobs: existing.as_ref().and_then(|c| c.jobs),
             forge,
+            // Setup does not prompt for destination overrides; retain power-user settings.
+            forge_repos: existing.as_ref().and_then(|c| c.forge_repos.clone()),
         };
         config.save(git)?;
 
@@ -574,8 +601,8 @@ fn order_like(items: Vec<String>, previous: Option<&[String]>) -> Vec<String> {
 
 /// The prompt offering forge detection, spelling out which remote is which.
 ///
-/// With remotes on different forges the answer applies to all of them, so the
-/// question names each pairing instead of silently picking one.
+/// Name every detected pairing so auto-detection is clear, without implying
+/// that all remotes will be queried regardless of destination selection.
 fn forge_question(detections: &[forge::Detection]) -> String {
     let mut kinds: Vec<forge::ForgeKind> = Vec::new();
     for detection in detections {
@@ -593,11 +620,12 @@ fn forge_question(detections: &[forge::Detection]) -> String {
     let scope = if kinds.len() == 1 {
         format!("{} detected", kinds[0].label())
     } else {
-        "Remotes point to different forges; each is asked its own".to_string()
+        "Remotes point to different forges".to_string()
     };
     format!(
-        "{scope}: {pairs}. Ask the forge which pull/merge requests were merged, \
-         before checking git? (networked: branch names are sent to the forge)"
+        "{scope}: {pairs}. Ask the selected destination repositories which pull/merge requests \
+         were merged, before checking git? (defaults to protected branches' tracking remotes; \
+         networked: branch names are sent to the forge)"
     )
 }
 
@@ -690,6 +718,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         config.save(&git)?;
 
@@ -714,6 +743,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         config.save(&git)?;
 
@@ -761,6 +791,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         config.save(&git)?;
 
@@ -783,6 +814,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         }
         .save(&git)?;
 
@@ -805,6 +837,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         }
         .save(&git)?;
 
@@ -818,6 +851,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         }
         .save(&git)?;
 
@@ -840,6 +874,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         config1.save(&git)?;
 
@@ -853,6 +888,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         config2.save(&git)?;
 
@@ -995,6 +1031,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         config.save(&git)?;
 
@@ -1012,6 +1049,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         config2.save(&git)?;
 
@@ -1029,6 +1067,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         config3.save(&git)?;
 
@@ -1051,6 +1090,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         config.save(&git)?;
 
@@ -1081,6 +1121,31 @@ mod tests {
             let loaded = Config::try_load(&git)?.expect("config should exist");
             assert_eq!(loaded.forge, forge);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn repository_overrides_roundtrip_in_order_and_are_removed_when_unset() -> Result<()> {
+        let (_dir, git) = crate::test_helpers::init_repo()?;
+        let mut config = Config {
+            forge_repos: Some(vec![
+                "upstream".into(),
+                "git@gitlab.com:group/sub/project.git".into(),
+            ]),
+            ..Config::default()
+        };
+        config.save(&git)?;
+        assert_eq!(Config::try_load(&git)?.unwrap(), config);
+        let loaded = load_or_setup(&git, &Ui::new())?;
+        assert_eq!(loaded.forge_repos, config.forge_repos);
+        // Saving while disabled must retain overrides for the next opt-in run.
+        config.forge = Some(ForgeSetting::Off);
+        config.save(&git)?;
+        assert_eq!(Config::try_load(&git)?.unwrap(), config);
+        config.forge_repos = None;
+        config.save(&git)?;
+        assert!(git.config_get_all("wipe.forgeRepo")?.is_empty());
+        assert_eq!(Config::try_load(&git)?.unwrap().forge_repos, None);
         Ok(())
     }
 

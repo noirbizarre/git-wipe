@@ -174,6 +174,14 @@ pub struct Cli {
     )]
     pub forge: Option<ForgeSetting>,
 
+    /// Repository to query for merged requests (repeat for several)
+    ///
+    /// Accepts a Git remote name or repository URL. Replaces wipe.forgeRepo.
+    /// By default, uses the tracking remotes of protected branches, otherwise
+    /// upstream, then origin. Does not enable forge access by itself.
+    #[arg(long, value_name = "REMOTE-OR-URL", global = true)]
+    pub forge_repo: Vec<String>,
+
     /// Do not consult the forge (overrides config)
     #[arg(long, overrides_with = "forge", global = true)]
     pub no_forge: bool,
@@ -251,7 +259,7 @@ pub enum ConfigAction {
     Set {
         /// Configuration key (e.g. worktrunk)
         ///
-        /// For multi-valued keys (protected, ignore, remote) this replaces
+        /// For multi-valued keys (protected, ignore, remote, forgeRepo) this replaces
         /// every existing value; use the add-*/remove-* subcommands to edit
         /// them individually.
         key: String,
@@ -296,6 +304,18 @@ pub enum ConfigAction {
     RemoveRemote {
         /// Remote name to remove
         name: String,
+    },
+
+    /// Add a repository to query for merged requests
+    AddForgeRepo {
+        /// Git remote name or repository URL
+        repository: String,
+    },
+
+    /// Remove a repository from the forge lookup list
+    RemoveForgeRepo {
+        /// Exact configured remote name or repository URL
+        repository: String,
     },
 
     /// Mark a branch as protected via per-branch config

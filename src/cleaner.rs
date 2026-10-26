@@ -77,6 +77,8 @@ pub struct CleanerOptions {
     pub effort: Effort,
     /// Whether the forge is asked about merged pull/merge requests first.
     pub forge: ForgeSetting,
+    /// Effective explicit destinations, independent of remotes being cleaned.
+    pub forge_repos: Option<Vec<String>>,
     /// Minimum age a worktree must have before it may be removed.
     pub min_age: MinAge,
     /// Minimum on-disk size a worktree must have before it may be removed.
@@ -191,12 +193,21 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
     // Read protection and ignore rules once; every detection pass shares them.
     let filter = Filter::load(git, config)?;
 
-    // The forge behind each remote, identified from its URL (no network yet).
-    // Shared by the local and remote scans, which also share its answers.
+    // PRs target protected branches' repositories, which may differ from the
+    // fork being cleaned. Both scans share the selected repositories' answers.
     let forges = opts
         .forge
         .is_enabled()
-        .then(|| effective_remotes(git, config))
+        .then(|| {
+            crate::forge::select_repositories(
+                git,
+                &filter,
+                opts.forge,
+                opts.forge_repos
+                    .as_deref()
+                    .or(config.forge_repos.as_deref()),
+            )
+        })
         .transpose()?
         .map(|remotes| RemoteForges::new(git, opts.forge, remotes));
     let forge: Option<&dyn ForgeSource> = forges.as_ref().map(|f| f as &dyn ForgeSource);
@@ -1483,6 +1494,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         }
     }
 
@@ -1504,6 +1516,7 @@ mod tests {
             show_size: false,
             jobs: TEST_JOBS,
             forge: ForgeSetting::Off,
+            forge_repos: None,
         }
     }
 
@@ -1580,6 +1593,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         let ui = Ui::new();
         let opts = CleanerOptions {
@@ -1599,6 +1613,7 @@ mod tests {
             show_size: false,
             jobs: TEST_JOBS,
             forge: ForgeSetting::Off,
+            forge_repos: None,
         };
 
         // The fetch will fail but the cleaner should not bail out.
@@ -1877,6 +1892,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         let remotes = effective_remotes(&git, &config_with)?;
         assert_eq!(remotes, vec!["origin", "upstream"]);
@@ -1891,6 +1907,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         let remotes = effective_remotes(&git, &config_without)?;
         assert!(remotes.is_empty());
@@ -3278,6 +3295,7 @@ mod tests {
             min_size: None,
             jobs: None,
             forge: None,
+            forge_repos: None,
         };
         let ui = Ui::new();
         let mut opts = opts_yes_skip_network();

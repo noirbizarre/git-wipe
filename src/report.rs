@@ -357,6 +357,8 @@ pub struct ConfigReport {
     pub worktrunk: Option<bool>,
     /// `null` means "off".
     pub forge: Option<ForgeSetting>,
+    /// `null` means infer repositories from protected branch tracking.
+    pub forge_repos: Option<Vec<String>>,
 }
 
 /// Render a path for the JSON document (lossy, like the human output).
@@ -546,6 +548,7 @@ mod tests {
             branch_ignored: Vec::new(),
             worktrunk: None,
             forge: None,
+            forge_repos: None,
             effort: None,
             min_age: None,
             min_size: None,
@@ -565,6 +568,7 @@ mod tests {
             branch_ignored: Vec::new(),
             worktrunk: Some(true),
             forge: Some(ForgeSetting::Auto),
+            forge_repos: None,
             min_age: None,
             min_size: None,
             effort: Some(Effort::Quick),
