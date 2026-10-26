@@ -11,6 +11,21 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 > There is no automatic configuration migration — see the README for how to
 > move an existing `[sync]` section across.
 
+## [0.6.1](https://github.com/noirbizarre/git-wipe/compare/0.6.0..0.6.1) - 2026-10-26
+
+### 🐛 Bug Fixes
+
+- **forge** Detect merged requests in upstream repositories ([#108](https://github.com/noirbizarre/git-wipe/issues/108)) - ([fed8564](https://github.com/noirbizarre/git-wipe/commit/fed8564b8fade806646619ab356a38432722cd43))
+- **packaging** Make the AUR source package build ([#104](https://github.com/noirbizarre/git-wipe/issues/104)) - ([5c7a466](https://github.com/noirbizarre/git-wipe/commit/5c7a4664941430d966cf7aaabc46c0754180d3a1))
+
+### 📚 Documentation
+
+- **readme** Fix Mermaid flowchart rendering on GitHub ([#107](https://github.com/noirbizarre/git-wipe/issues/107)) - ([e000079](https://github.com/noirbizarre/git-wipe/commit/e0000792d49a0a030ffb9c6e1e5041182e0084c2))
+
+### 🏗️ Build
+
+- **deps** Bump the rust-dependencies group across 1 directory with 2 updates ([#109](https://github.com/noirbizarre/git-wipe/issues/109)) - ([c73e57c](https://github.com/noirbizarre/git-wipe/commit/c73e57c22721df97caa3586b82917dbe2cf53b53))
+
 ## [0.6.0](https://github.com/noirbizarre/git-wipe/compare/0.5.0..0.6.0) - 2026-10-22
 
 ### 💫 Features
