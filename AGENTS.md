@@ -45,7 +45,7 @@ users grep for — renaming one is a breaking change.
 
 ## Commits
 
-Conventional Commits, enforced by commitlint on `commit-msg`. The type becomes a
+Conventional Commits, enforced by Commitizen with Emotional on `commit-msg`. The type becomes a
 changelog heading, so choose it as if someone will read it in release notes —
 because they will.
 
@@ -57,11 +57,9 @@ derives the version from the commit history, `prepare-release` applies it, and
 
 ## Before you push
 
-```sh
-mise run ci
-```
-
-Formatting, Clippy, spelling, workflow and Markdown linting, tests. Same as CI.
+Follow [CONTRIBUTING.md's validation guidance](CONTRIBUTING.md#before-you-push)
+to choose checks relevant to the change and report any skipped checks in your
+handoff or PR description.
 
 ## This repository is generated from a template
 

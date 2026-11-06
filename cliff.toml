@@ -114,7 +114,6 @@ tag_pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+"
 
 commit_preprocessors = [
   { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}](<REPO>/issues/${2}))" },
-  { pattern = ".*", replace_command = "typos --write-changes -" },
   # gh-ship embeds the release artifact in the Release PR body as an HTML
   # comment. A commit subject containing a literal `-->` would close that
   # comment early and spill JSON into the rendered description.

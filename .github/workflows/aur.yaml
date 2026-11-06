@@ -1,10 +1,7 @@
 name: 📦 AUR
 
-# Publishes the -bin package once a release is public. The trigger is
-# `release: published` rather than the completion of 📦 Publish Release,
-# because gh-ship only undrafts the release after that workflow succeeds — so
-# waiting for `published` means the URLs baked into the PKGBUILD already
-# resolve when the package lands.
+# `released` selects stable publication, excluding development prereleases.
+# gh-ship undrafts only after uploads succeed, so the package's URLs already resolve.
 #
 # The AUR creates a pkgbase on its first push, so this workflow needs no
 # manual bootstrap beyond owning the name.
@@ -12,7 +9,7 @@ run-name: 📦 AUR ${{ inputs.tag || github.event.release.tag_name }}
 
 on:
   release:
-    types: [published]
+    types: [released]
 
   workflow_dispatch:
     inputs:

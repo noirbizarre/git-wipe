@@ -7,10 +7,11 @@
 # did not anticipate is still an error.
 
 # Declaring the variables makes `vars.*` checked strictly, so a typo in a
-# variable name (e.g. `vars.APP_CLENT_ID`) is an error here rather than an
-# empty string at runtime, deep inside a release.
+# variable name is an error here rather than an empty string at runtime, deep
+# inside a release.
 config-variables:
   - APP_CLIENT_ID
+  - PRERELEASE_NAME
 
 paths:
   .github/workflows/**/*.{yml,yaml}:

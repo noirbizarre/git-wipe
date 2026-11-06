@@ -1,15 +1,12 @@
 name: 🍺 Homebrew
 
-# Updates the formula in the tap once a release is public. The trigger is
-# `release: published` rather than the completion of 📦 Publish Release,
-# because gh-ship only undrafts the release after that workflow succeeds — so
-# waiting for `published` means the URLs baked into the formula already
-# resolve when it lands in the tap.
+# `released` selects stable publication, excluding development prereleases.
+# gh-ship undrafts only after uploads succeed, so the formula's URLs already resolve.
 run-name: 🍺 Homebrew ${{ inputs.tag || github.event.release.tag_name }}
 
 on:
   release:
-    types: [published]
+    types: [released]
 
   workflow_dispatch:
     inputs:

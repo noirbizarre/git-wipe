@@ -18,7 +18,7 @@ workflows:
 pull_request:
   # The Release PR is squash-merged, and GitHub composes the squash commit from
   # this title. This repository lints its own commit messages with
-  # commitlint/config-conventional, so the title has to be a Conventional
+  # Commitizen with Emotional, so the title has to be a Conventional
   # Commit — `Release 0.3.0` is a subject our own hooks reject. `cliff.toml`
   # skips `^chore\(release\):`, so it never reappears in the next changelog.
   #
@@ -39,3 +39,5 @@ pull_request:
 
 release:
   draft: true
+  # The publisher also accepts the invoking main CI run's SHA for development builds.
+  publish_input: ref
