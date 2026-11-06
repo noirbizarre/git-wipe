@@ -19,17 +19,17 @@ hooks = [
 ]
 
 [[repos]]
-repo = "https://github.com/alessandrojcm/commitlint-pre-commit-hook"
-rev = "v9.21.0"
+repo = "https://github.com/commitizen-tools/commitizen"
+rev = "v4.19.3"
 
 [[repos.hooks]]
-id = "commitlint"
+id = "commitizen"
 stages = ["commit-msg"]
-additional_dependencies = ["@commitlint/config-conventional"]
+additional_dependencies = ["emotional==0.6.1"]
 
 # actionlint publishes its own hook manifest, so this uses that instead of
 # hand-rolling a `repo = "local"` block: version bumps are then visible to
-# `prek update` the same way the commitlint hook above already is, and
+# `prek update` the same way the Commitizen hook above already is, and
 # `name`/`entry`/`files` come from the manifest — nothing to override. mise
 # is a requirement to work on this project at all, so its shims already put
 # the pinned `actionlint` on PATH; the `actionlint-system` hook's bare
@@ -45,45 +45,39 @@ repo = "https://github.com/rhysd/actionlint"
 rev = "v1.7.12"
 hooks = [{ id = "actionlint-system" }]
 
-# Mechanically enforces the one Markdown convention AGENTS.md's Style section
-# otherwise only states: no prose line over 120 columns. Scoped to the
+# Checks Markdown style, including the 120-column prose limit. Scoped to the
 # project-authored docs, not CHANGELOG.md — that one is git-cliff's output,
 # not prose to wrap.
 [[repos]]
-repo = "https://github.com/DavidAnson/markdownlint-cli2"
-rev = "v0.23.2"
+repo = "https://github.com/rvben/rumdl-pre-commit"
+rev = "v0.3.2"
 
 [[repos.hooks]]
-id = "markdownlint-cli2"
+id = "rumdl-check"
 files = "^(AGENTS\\.md|CONTRIBUTING\\.md|README\\.md)$"
-# For the pretty output formatter .markdownlint-cli2.yaml configures — it
-# needs to resolve alongside markdownlint-cli2 itself, and this installs it
-# into the same node environment as the hook.
-additional_dependencies = ["markdownlint-cli2-formatter-pretty"]
 
 [[repos]]
-repo = "local"
+repo = "https://github.com/crate-ci/typos"
+rev = "v1.47.1"
 
 [[repos.hooks]]
 id = "typos"
-name = "typos"
-language = "system"
-entry = "typos"
-pass_filenames = false
+
+# Check the message before it enters release history; do not rewrite it.
+[[repos.hooks]]
+id = "typos"
+alias = "typos-commit-msg"
+args = ["--force-exclude"]
+stages = ["commit-msg"]
+
+[[repos]]
+repo = "local"
 
 [[repos.hooks]]
 id = "fmt"
 name = "cargo fmt"
 language = "system"
 entry = "cargo fmt --all -- --check"
-files = "\\.rs$"
-pass_filenames = false
-
-[[repos.hooks]]
-id = "clippy"
-name = "cargo clippy"
-language = "system"
-entry = "cargo clippy --all-targets --all-features -- -D warnings"
 files = "\\.rs$"
 pass_filenames = false
 

@@ -33,7 +33,7 @@ env:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -62,11 +62,24 @@ jobs:
         with:
           cache: true
 
-      # The hooks, not the mise tasks: this is the same command a developer's
-      # `git commit` runs, so a green CI means the hooks are actually passing
-      # rather than a parallel set of checks that happens to agree.
+      # Run the same hooks as `git commit`, then the heavier Rust lint task
+      # separately so committing does not require a Clippy compilation.
       - name: Run hooks
         run: prek run --all-files --show-diff-on-failure
+
+      - name: Lint Rust
+        run: mise run lint
+
+      # Check the release configuration and its workflows before release day.
+      - name: Install gh-ship
+        run: gh extension install noirbizarre/gh-ship
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate the release setup
+        run: gh ship validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   test:
     name: 🧪 Tests (${{ matrix.os.name }})
@@ -86,6 +99,11 @@ jobs:
             flag: macos
     steps:
       - uses: actions/checkout@v7
+      # Setup precedes caches so their post-save hooks run before the drive is dismounted.
+      - name: Tune Windows runner
+        uses: ./.github/actions/setup-windows
+        if: runner.os == 'Windows'
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
@@ -104,22 +122,32 @@ jobs:
         with:
           cache: true
 
-      - name: Disable Windows Defender real-time scanning
-        if: matrix.os.flag == 'windows'
+      - name: Verify Windows build storage
+        if: runner.os == 'Windows'
         shell: pwsh
-        # A Rust test suite spawns many short-lived processes and writes just as
-        # many small files into fresh temp directories. Defender's real-time
-        # protection inspects both, and that inspection is the standard,
-        # documented reason this workload is dramatically slower on
-        # `windows-latest` than on Linux/macOS — matching the "~4x slower" this
-        # project already lives with per `.github/codecov.yml`. The runner is
-        # destroyed at the end of the job, so there is nothing to re-enable.
-        run: Set-MpPreference -DisableRealtimeMonitoring $true
+        run: ./.github/actions/setup-windows/verify.ps1
 
       - name: Run tests (with coverage)
         run: |
-          cargo llvm-cov nextest --profile ci
+          # --no-report also disables automatic cleaning: discard cached workspace artifacts
+          # and profiles explicitly so earlier runs cannot contaminate this run's coverage.
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov nextest --profile ci --no-report
           cargo llvm-cov report --lcov --output-path lcov.info
+
+      # Keep raw inputs even when a corrupt profile prevents generating lcov.info.
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.os.flag }}-${{ github.run_attempt }}
+          path: |
+            lcov.info
+            target/llvm-cov-target/*.profraw
+            target/llvm-cov-target/*.profdata
+            target/llvm-cov-target/*-profraw-list
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
@@ -135,23 +163,6 @@ jobs:
         with:
           directory: target/nextest/ci
           report_type: test_results
-
-  # gh-ship runs the release. Its configuration and the workflows it names must
-  # satisfy the contract it enforces, and finding out otherwise mid-release is
-  # the worst possible moment — so it is checked on every pull request instead.
-  ship:
-    name: 🚢 Ship setup
-    runs-on: ubuntu-latest
-    env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install gh-ship
-        run: gh extension install noirbizarre/gh-ship
-
-      - name: Validate the release setup
-        run: gh ship validate
 
   # `rust-version` in Cargo.toml is a promise. Without a job that keeps it, it
   # drifts the first time anyone uses a newer language feature — and the
@@ -183,3 +194,61 @@ jobs:
       # consuming the library, not about developing it.
       - name: Check
         run: cargo check --all-targets
+
+  # Link every target on PRs without paying release optimization/LTO costs.
+  build:
+    name: 🏗️ Build (${{ matrix.build.label }})
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.build.runner }}
+    env:
+      # cross's containers do not contain the caller's sccache executable.
+      RUSTC_WRAPPER: ""
+      RUSTFLAGS: -D warnings
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+          - { label: linux-amd64, target: x86_64-unknown-linux-gnu, runner: ubuntu-latest, cross: true }
+          - { label: linux-arm64, target: aarch64-unknown-linux-gnu, runner: ubuntu-latest, cross: true }
+          - { label: linux-amd64-musl, target: x86_64-unknown-linux-musl, runner: ubuntu-latest, cross: true }
+          - { label: linux-arm64-musl, target: aarch64-unknown-linux-musl, runner: ubuntu-latest, cross: true }
+          - { label: darwin-amd64, target: x86_64-apple-darwin, runner: macos-latest }
+          - { label: darwin-arm64, target: aarch64-apple-darwin, runner: macos-latest }
+          - { label: windows-amd64, target: x86_64-pc-windows-msvc, runner: windows-latest }
+          - { label: windows-arm64, target: aarch64-pc-windows-msvc, runner: windows-11-arm }
+          - { label: freebsd-amd64, target: x86_64-unknown-freebsd, runner: ubuntu-latest, cross: true }
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Setup precedes caches so their post-save hooks run before the drive is dismounted.
+      - name: Tune Windows runner
+        uses: ./.github/actions/setup-windows
+        if: runner.os == 'Windows'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.build.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pr-build-${{ matrix.build.target }}
+      - uses: taiki-e/install-action@cross
+        if: matrix.build.cross
+      # Exercise the same CRT choice as downloaded Windows release binaries.
+      - name: Statically link the MSVC C runtime
+        if: endsWith(matrix.build.target, 'windows-msvc')
+        run: echo "RUSTFLAGS=${RUSTFLAGS} -C target-feature=+crt-static" >> "$GITHUB_ENV"
+      - name: Verify Windows build storage
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/actions/setup-windows/verify.ps1
+      - name: Build
+        env:
+          TARGET: ${{ matrix.build.target }}
+          CROSS: ${{ matrix.build.cross }}
+        run: |
+          if [ "${CROSS:-}" = "true" ]; then
+            cross build --locked --target "$TARGET"
+          else
+            cargo build --locked --target "$TARGET"
+          fi

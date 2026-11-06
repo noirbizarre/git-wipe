@@ -1,0 +1,35 @@
+name: Set up Windows builds
+description: Configure Defender, ReFS build storage, and cache archiving for Windows CI
+
+runs:
+  using: composite
+  steps:
+    - name: Disable Windows Defender real-time scanning
+      shell: pwsh
+      # Disposable runners otherwise scan every compiler output and short-lived test process.
+      run: Set-MpPreference -DisableRealtimeMonitoring $true
+
+    # Register cleanup before cache actions so their post-save hooks run before dismount.
+    - name: Set up build storage
+      uses: samypr100/setup-dev-drive@v4
+      with:
+        # This is a dynamic ceiling, not reserved space on the backing disk.
+        drive-size: 64GB
+        drive-type: Dynamic
+        drive-format: ReFS
+        drive-path: ${{ github.workspace }}/../rust-build.vhdx
+        mount-path: ${{ runner.temp }}/rust-build
+
+    - name: Link build storage and configure archiving
+      shell: pwsh
+      run: |
+        # A subdirectory keeps protected volume metadata out of cache pruning.
+        $target = New-Item -ItemType Directory -Path "$env:DEV_DRIVE/target" -ErrorAction Stop
+        New-Item -ItemType Junction -Path "$env:GITHUB_WORKSPACE/target" -Target $target.FullName -ErrorAction Stop
+        # Subsequent steps and cache post hooks must archive contents and preserve the junction on restore.
+        $tarOptions = "$env:TAR_OPTIONS --dereference --keep-directory-symlink".Trim()
+        "TAR_OPTIONS=$tarOptions" >> $env:GITHUB_ENV
+
+    - name: Verify build storage
+      shell: pwsh
+      run: '& "$env:GITHUB_ACTION_PATH/verify.ps1"'

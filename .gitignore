@@ -17,9 +17,6 @@ site/
 # `mise run man`'s collected output.
 /dist
 
-# Installed by the commitlint prek hook.
-node_modules/
-
 # The gh-ship release artifact, written by the prepare-release workflow.
 /ship.release.json
 

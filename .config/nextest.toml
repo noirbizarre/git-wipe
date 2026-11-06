@@ -1,9 +1,8 @@
 # nextest configuration.
 
 [profile.default]
-# A slow test is normal on a cold cache; a hung one is not. Four consecutive
-# 30-second periods without progress is a hang, and killing it turns a job that
-# would burn the full runner timeout into one that fails in two minutes.
+# Cap each test at four 30-second elapsed periods, even if it keeps printing progress.
+# This bounds hangs before they consume the full runner timeout.
 slow-timeout = { period = "30s", terminate-after = 4 }
 
 [profile.ci]

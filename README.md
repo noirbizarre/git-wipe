@@ -633,12 +633,12 @@ CLI flags:
    With `--forge`, [the forge](#forge-detection) is asked before any of them,
    and they only judge what it leaves undecided:
 
-   **Effort 1 (fastest)**
+   Effort 1 (fastest):
 
    - *Standard detection*: `git branch --merged <target>` catches fast-forward
      and regular merges.
 
-   **Effort 2 (default)**
+   Effort 2 (default):
 
    - *Rebase-aware detection*: `git cherry <target> <branch>` catches
      rebased branches by checking whether every commit has already been
@@ -650,7 +650,7 @@ CLI flags:
      fork point (a commit and its revert, a pure history rewrite, a branch
      created but never meaningfully advanced).
 
-   **Effort 3 (most thorough, noticeably slower)**
+   Effort 3 (most thorough, noticeably slower):
 
    - *Patch-ID matching*: compares `git patch-id --stable` fingerprints of the
      branch's commits against those recently applied on the target, catching
@@ -692,10 +692,10 @@ CLI flags:
    (someone may simply have deleted an unmerged remote branch), these entries
    are never auto-selected by `--yes` unless you also pass `--delete-gone`
    (in the interactive multiselect, see below for what is pre-checked). Detection requires up-to-date
-    remote-tracking refs, so it only runs after a successful `fetch --prune`,
-    or in `--dry-run` where a warning notes the results may be stale. `git wipe
-    status` never fetches: it reports `gone` from the refs as they are on disk,
-    with the same staleness warning.
+   remote-tracking refs, so it only runs after a successful `fetch --prune`,
+   or in `--dry-run` where a warning notes the results may be stale. `git wipe
+   status` never fetches: it reports `gone` from the refs as they are on disk,
+   with the same staleness warning.
 
    All cleanup items are presented in a **single unified multiselect**:
    merged branches (with their worktree path shown when applicable), branches
