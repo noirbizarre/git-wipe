@@ -1,0 +1,27 @@
+[global]
+disable = [
+  # Allow raw HTML in the README's centered hero and badges.
+  # https://rumdl.dev/md033/
+  "MD033",
+  # Allow the README's hero block before its first heading.
+  # https://rumdl.dev/md041/
+  "MD041",
+  # Preserve authored table spacing instead of enforcing a formatter style.
+  # https://rumdl.dev/md060/
+  "MD060",
+]
+
+# Keep prose and headings within 120 columns, exempting tables and code blocks.
+# https://rumdl.dev/md013/
+[MD013]
+line-length = 120
+heading-line-length = 120
+tables = false
+code-blocks = false
+
+# --- project-specific ---------------------------------------------------
+#
+# Add per-project rule exceptions below this line, with a one-line description
+# followed by the rule's documentation link. Keep the default checks enabled.
+# The template owns everything above; `git tpl update` never touches this file
+# below the marker.

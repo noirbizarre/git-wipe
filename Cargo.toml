@@ -1,7 +1,8 @@
 # git-wipe — Wipe out merged local branches and worktrees
 #
-# Single crate, `[lib]` + `[[bin]]`. The library holds the engine; the binary is
-# a thin CLI over it, so integration tests can exercise either.
+# Single crate, library + binary. The library (`src/lib.rs`) holds the engine;
+# the binary (`src/main.rs`) is a thin CLI over it, so integration tests can
+# exercise either. Cargo discovers both targets on its own.
 
 [package]
 name = "git-wipe"
@@ -32,7 +33,7 @@ build = "build.rs"
 # target, so this list never drifts from the publish matrix.
 #
 # `pkg-fmt = "bin"`: the publish workflow uploads the raw executable, not an
-# archive — see publish-release.yaml's "Stage the asset" step.
+# archive — see publish-release.yaml's "Build and stage the asset" step.
 [package.metadata.binstall]
 pkg-fmt = "bin"
 
@@ -63,16 +64,13 @@ pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_windows-a
 [package.metadata.binstall.overrides.x86_64-unknown-freebsd]
 pkg-url = "{ repo }/releases/download/{ version }/git-wipe_{ version }_freebsd-amd64"
 
+# Keep line-number backtraces without full debugger information, reducing
+# compilation IO, link time and the size of dev/test outputs.
+[profile.dev]
+debug = "line-tables-only"
 
-
-
-[[bin]]
-name = "git-wipe"
-path = "src/main.rs"
-
-[lib]
-name = "git_wipe"
-path = "src/lib.rs"
+[profile.test]
+debug = "line-tables-only"
 
 [profile.release]
 # Release binaries are cross-compiled once per tag and downloaded many times, so
