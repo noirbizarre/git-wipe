@@ -140,18 +140,39 @@ const TOKEN: &[(&str, &str)] = &[("GITHUB_TOKEN", "t0k3n")];
 
 /// A GitHub GraphQL endpoint reporting `merged` branches at the given commits.
 fn github(merged: Vec<(&'static str, String)>) -> impl Fn(&Recorded) -> (u16, String) {
+    github_requests(
+        merged
+            .into_iter()
+            .map(|(branch, sha)| (branch, sha, "MERGED"))
+            .collect(),
+    )
+}
+
+/// Enforce the query filter so closed fixtures cannot mask a merged-only query.
+fn github_requests(
+    requests: Vec<(&'static str, String, &'static str)>,
+) -> impl Fn(&Recorded) -> (u16, String) {
     move |request| {
         let body: Value = serde_json::from_str(&request.body).unwrap();
+        let query = body["query"].as_str().unwrap();
+        assert!(query.contains("headRefOid state"));
         let variables = &body["variables"];
         let mut repository = serde_json::Map::new();
         let mut i = 0;
         while let Some(branch) = variables.get(format!("b{i}")) {
-            let nodes: Vec<Value> = merged
-                .iter()
-                .filter(|(name, _)| branch == name)
-                .map(|(_, sha)| json!({ "headRefOid": sha }))
-                .collect();
-            repository.insert(format!("r{i}"), json!({ "nodes": nodes }));
+            for (alias, filter) in [("m", "MERGED"), ("c", "CLOSED")] {
+                assert!(query.contains(&format!(
+                    "{alias}{i}: pullRequests(headRefName: $b{i}, states: {filter}, first: 20)"
+                )));
+                // Mirror the real connection limit so request history can expose truncation bugs.
+                let nodes: Vec<Value> = requests
+                    .iter()
+                    .filter(|(name, _, state)| branch == name && *state == filter)
+                    .take(20)
+                    .map(|(_, sha, state)| json!({ "headRefOid": sha, "state": state }))
+                    .collect();
+                repository.insert(format!("{alias}{i}"), json!({ "nodes": nodes }));
+            }
             i += 1;
         }
         (
@@ -226,6 +247,292 @@ fn a_pull_request_merged_at_another_commit_is_not_trusted() {
 
     assert!(run.success, "{}", run.stderr);
     assert_eq!(run.reason(AMENDED), None);
+}
+
+#[test]
+fn closed_requests_at_the_tip_qualify_locally_remotely_and_in_status() {
+    let dir = repo("https://github.com/o/r.git");
+    let p = dir.path();
+    let head = tip(p, "feature/wip");
+    git(p, &["update-ref", "refs/remotes/origin/feature/wip", &head]);
+    git(
+        p,
+        &["update-ref", "refs/remotes/origin/main", &tip(p, "main")],
+    );
+    let forge = FakeForge::start(github_requests(vec![
+        ("feature/wip", head.clone(), "CLOSED"),
+        ("feature/wip", head, "OPEN"),
+        (AMENDED, tip(p, "main"), "CLOSED"),
+        (AMENDED, tip(p, AMENDED), "OPEN"),
+    ]));
+    let run = wipe_scope(p, &forge.url, TOKEN, &["--forge", "--yes"], None);
+    assert!(run.success, "{:?}", run.json);
+    assert_eq!(run.reason("feature/wip").as_deref(), Some("pr-closed"));
+    assert_eq!(
+        run.reason(AMENDED),
+        None,
+        "stale closed and open requests cannot qualify"
+    );
+    assert_eq!(run.json["local"]["pr_closed"], json!(["feature/wip"]));
+    assert_eq!(run.json["local"]["pr_merged"], json!([]));
+    assert_eq!(run.json["remotes"][0]["pr_closed"], json!(["feature/wip"]));
+    assert!(
+        run.json["remotes"][0]["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["branch"] == "feature/wip" && b["reason"] == "pr-closed")
+    );
+    assert_eq!(
+        forge.requests().len(),
+        1,
+        "local and remote scans share evidence"
+    );
+
+    let status = wipe_status(p, &forge.url, &["--forge", "--merged"]);
+    let entry = status["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["branch"] == "feature/wip")
+        .unwrap();
+    assert_eq!(entry["status"], json!(["pr-closed"]));
+    let text = Command::cargo_bin("git-wipe")
+        .unwrap()
+        .current_dir(p)
+        .args(["status", "--forge", "--no-color"])
+        .env("GIT_WIPE_FORGE_API_URL", &forge.url)
+        .env("GITHUB_TOKEN", "t0k3n")
+        .output()
+        .unwrap();
+    assert!(text.status.success());
+    assert!(
+        String::from_utf8_lossy(&text.stdout)
+            .lines()
+            .any(|line| line.contains("feature/wip") && line.contains("pr-closed")),
+        "{}",
+        String::from_utf8_lossy(&text.stdout)
+    );
+}
+
+#[test]
+fn cached_closed_evidence_is_checked_against_each_namespaces_tip() {
+    let dir = repo("https://github.com/o/r.git");
+    let p = dir.path();
+    git(
+        p,
+        &[
+            "update-ref",
+            "refs/remotes/origin/feature/wip",
+            &tip(p, "main"),
+        ],
+    );
+    git(
+        p,
+        &["update-ref", "refs/remotes/origin/main", &tip(p, "main")],
+    );
+    let forge = FakeForge::start(github_requests(vec![(
+        "feature/wip",
+        tip(p, "feature/wip"),
+        "CLOSED",
+    )]));
+    let run = wipe_scope(p, &forge.url, TOKEN, &["--forge"], None);
+    assert!(run.success, "{:?}", run.json);
+    assert_eq!(run.reason("feature/wip").as_deref(), Some("pr-closed"));
+    assert_eq!(run.json["remotes"][0]["pr_closed"], json!([]));
+    assert_eq!(forge.requests().len(), 1);
+}
+
+#[test]
+fn a_matching_merge_wins_over_closed_evidence_regardless_of_repository_order() {
+    let dir = repo("https://github.com/o/r.git");
+    let p = dir.path();
+    let merged = github_requests(vec![(AMENDED, tip(p, AMENDED), "MERGED")]);
+    let closed = github_requests(vec![(AMENDED, tip(p, AMENDED), "CLOSED")]);
+    let forge = FakeForge::start(move |request| {
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+        if body["variables"]["name"] == "merged" {
+            merged(request)
+        } else {
+            closed(request)
+        }
+    });
+    for repositories in [["merged", "closed"], ["closed", "merged"]] {
+        let urls = repositories.map(|name| format!("https://github.com/o/{name}"));
+        let run = wipe(
+            p,
+            &forge.url,
+            TOKEN,
+            &[
+                "--forge",
+                "--forge-repo",
+                &urls[0],
+                "--forge-repo",
+                &urls[1],
+            ],
+        );
+        assert!(run.success, "{:?}", run.json);
+        assert_eq!(run.reason(AMENDED).as_deref(), Some("pr-merged"));
+        assert_eq!(run.json["local"]["pr_closed"], json!([]));
+    }
+}
+
+#[test]
+fn github_closed_requests_cannot_crowd_out_a_matching_merge() {
+    let dir = repo("https://github.com/o/r.git");
+    let p = dir.path();
+    let head = tip(p, AMENDED);
+    let mut requests = vec![(AMENDED, head.clone(), "CLOSED")];
+    requests.extend((0..20).map(|i| (AMENDED, format!("stale-{i}"), "CLOSED")));
+    requests.push((AMENDED, head, "MERGED"));
+    let forge = FakeForge::start(github_requests(requests));
+    let run = wipe(p, &forge.url, TOKEN, &["--forge"]);
+    assert!(run.success, "{:?}", run.json);
+    assert_eq!(run.reason(AMENDED).as_deref(), Some("pr-merged"));
+    assert_eq!(run.json["local"]["pr_closed"], json!([]));
+    assert_eq!(
+        forge.requests().len(),
+        1,
+        "both states share one batched HTTP request"
+    );
+}
+
+#[test]
+fn yes_deletes_closed_unmerged_branches_their_clean_worktrees_and_remote_branches() {
+    let dir = repo("https://github.com/o/r.git");
+    let p = dir.path();
+    let worktrees = TempDir::new().unwrap();
+    let wt = worktrees.path().join("closed");
+    git(p, &["worktree", "add", wt.to_str().unwrap(), "feature/wip"]);
+    let remote = TempDir::new().unwrap();
+    git(remote.path(), &["init", "--bare"]);
+    // Keep the forge URL for detection, but direct mutations into an isolated bare repo.
+    git(
+        p,
+        &[
+            "remote",
+            "set-url",
+            "--push",
+            "origin",
+            remote.path().to_str().unwrap(),
+        ],
+    );
+    git(p, &["push", "origin", "main", "feature/wip"]);
+    let forge = FakeForge::start(github_requests(vec![(
+        "feature/wip",
+        tip(p, "feature/wip"),
+        "CLOSED",
+    )]));
+    let output = Command::cargo_bin("git-wipe")
+        .unwrap()
+        .current_dir(p)
+        .args([
+            "--json",
+            "--yes",
+            "--no-fetch",
+            "--no-pull",
+            "--no-worktrunk",
+            "--forge",
+        ])
+        .env("GIT_WIPE_FORGE_API_URL", &forge.url)
+        .env("GITHUB_TOKEN", "t0k3n")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        !wt.exists(),
+        "clean closed-request worktree must be removed"
+    );
+    assert!(!git(p, &["branch", "--list", "feature/wip"]).contains("feature/wip"));
+    assert!(git(remote.path(), &["branch", "--list", "feature/wip"]).is_empty());
+    assert!(
+        report["local"]["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["branch"] == "feature/wip"
+                && b["reason"] == "pr-closed"
+                && b["status"] == "deleted")
+    );
+    assert!(
+        report["remotes"][0]["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["branch"] == "feature/wip"
+                && b["reason"] == "pr-closed"
+                && b["status"] == "deleted")
+    );
+}
+
+#[test]
+fn closed_requests_keep_existing_worktree_safeguards_under_yes() {
+    for (guard, args) in [
+        ("dirty", vec![]),
+        ("locked", vec![]),
+        ("young", vec!["--min-age", "1h"]),
+        ("small", vec!["--min-size", "1G"]),
+        ("disabled", vec!["--no-worktrees"]),
+    ] {
+        let dir = repo("https://github.com/o/r.git");
+        let p = dir.path();
+        let worktrees = TempDir::new().unwrap();
+        let wt = worktrees.path().join("closed");
+        git(p, &["worktree", "add", wt.to_str().unwrap(), "feature/wip"]);
+        match guard {
+            "dirty" => std::fs::write(wt.join("uncommitted.txt"), "keep me\n").unwrap(),
+            "locked" => {
+                git(p, &["worktree", "lock", wt.to_str().unwrap()]);
+            }
+            _ => {}
+        }
+        let forge = FakeForge::start(github_requests(vec![(
+            "feature/wip",
+            tip(p, "feature/wip"),
+            "CLOSED",
+        )]));
+        let output = Command::cargo_bin("git-wipe")
+            .unwrap()
+            .current_dir(p)
+            .args([
+                "--json",
+                "--yes",
+                "--local-only",
+                "--no-fetch",
+                "--no-pull",
+                "--no-worktrunk",
+                "--forge",
+            ])
+            .args(args)
+            .env("GIT_WIPE_FORGE_API_URL", &forge.url)
+            .env("GITHUB_TOKEN", "t0k3n")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{guard}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            wt.exists(),
+            "{guard} worktree must survive closed-request cleanup"
+        );
+        assert!(
+            git(p, &["branch", "--list", "feature/wip"]).contains("feature/wip"),
+            "{guard} branch must survive"
+        );
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            report["local"]["pr_closed"],
+            json!(["feature/wip"]),
+            "{guard}: the forge evidence must still qualify"
+        );
+    }
 }
 
 #[test]
@@ -393,8 +700,11 @@ fn a_repository_without_remotes_warns_and_runs_offline() {
 fn gitlab_is_queried_over_graphql_with_pagination() {
     let dir = repo("git@gitlab.com:group/sub/r.git");
     let tip = tip(dir.path(), AMENDED);
+    let closed_tip = self::tip(dir.path(), "feature/wip");
     let forge = FakeForge::start(move |request| {
         let body: Value = serde_json::from_str(&request.body).unwrap();
+        assert!(body["query"].as_str().unwrap().contains("state: $state"));
+        let closed = body["variables"]["state"] == "closed";
         let page = if body["variables"]["after"].is_null() {
             json!({
                 "nodes": [{"sourceBranch": "feature/wip", "diffHeadSha": "0000"}],
@@ -403,7 +713,10 @@ fn gitlab_is_queried_over_graphql_with_pagination() {
         } else {
             assert_eq!(body["variables"]["after"], "c1");
             json!({
-                "nodes": [{"sourceBranch": AMENDED, "diffHeadSha": tip}],
+                "nodes": [
+                    {"sourceBranch": if closed { "feature/wip" } else { AMENDED }, "diffHeadSha": if closed { &closed_tip } else { &tip }},
+                    {"sourceBranch": AMENDED, "diffHeadSha": &tip},
+                ],
                 "pageInfo": {"hasNextPage": false, "endCursor": null},
             })
         };
@@ -419,15 +732,25 @@ fn gitlab_is_queried_over_graphql_with_pagination() {
     assert!(run.success, "{}", run.stderr);
     assert!(run.warnings().is_empty(), "{:?}", run.warnings());
     assert_eq!(run.reason(AMENDED).as_deref(), Some("pr-merged"));
-    // A merge request at another commit does not count.
-    assert_eq!(run.reason("feature/wip"), None);
+    // A stale merged request must not override a closed request at the current tip.
+    assert_eq!(run.reason("feature/wip").as_deref(), Some("pr-closed"));
 
     let requests = forge.requests();
-    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(requests.len(), 4, "{requests:?}");
     assert_eq!(requests[0].path, "/api/graphql");
     assert_eq!(requests[0].authorization, None);
     let first: Value = serde_json::from_str(&requests[0].body).unwrap();
     assert_eq!(first["variables"]["path"], "group/sub/r");
+    let states: Vec<Value> = requests
+        .iter()
+        .map(|request| serde_json::from_str::<Value>(&request.body).unwrap()["variables"].clone())
+        .collect();
+    assert_eq!(states[0]["state"], "merged");
+    assert_eq!(states[2]["state"], "closed");
+    assert!(
+        states[2]["after"].is_null(),
+        "closed pagination must restart"
+    );
 }
 
 #[test]
@@ -463,12 +786,13 @@ fn gitea_and_forgejo_are_queried_over_rest() {
         let dir = repo("https://git.example.com/team/app.git");
         git(dir.path(), &["config", "wipe.forge", kind]);
         let tip = tip(dir.path(), AMENDED);
+        let closed_tip = self::tip(dir.path(), "feature/wip");
         let forge = FakeForge::start(move |_| {
             (
                 200,
                 json!([
-                    {"merged": false, "head": {"ref": "feature/wip", "sha": "1111"}},
-                    {"merged": true, "head": {"ref": AMENDED, "sha": tip}},
+                    {"merged": false, "state": "closed", "head": {"ref": "feature/wip", "sha": closed_tip}},
+                    {"merged": true, "state": "closed", "head": {"ref": AMENDED, "sha": tip}},
                 ])
                 .to_string(),
             )
@@ -479,7 +803,11 @@ fn gitea_and_forgejo_are_queried_over_rest() {
         assert!(run.success, "{kind}: {}", run.stderr);
         assert!(run.warnings().is_empty(), "{kind}: {:?}", run.warnings());
         assert_eq!(run.reason(AMENDED).as_deref(), Some("pr-merged"), "{kind}");
-        assert_eq!(run.reason("feature/wip"), None, "{kind}");
+        assert_eq!(
+            run.reason("feature/wip").as_deref(),
+            Some("pr-closed"),
+            "{kind}"
+        );
         assert_eq!(run.json["forge"], kind);
 
         let requests = forge.requests();
@@ -494,6 +822,39 @@ fn gitea_and_forgejo_are_queried_over_rest() {
         );
         assert_eq!(requests[0].authorization.as_deref(), Some("token gt"));
     }
+}
+
+#[test]
+fn gitea_searches_older_pages_after_every_branch_name_has_been_seen() {
+    let dir = repo("https://gitea.example.com/team/app.git");
+    let head = tip(dir.path(), AMENDED);
+    let forge = FakeForge::start(move |request| {
+        assert!(request.path.contains("state=closed"));
+        let page = if request.path.ends_with("page=1") {
+            // Cover every requested name with stale heads; the exact tip is on page two.
+            (0..50)
+                .map(|i| {
+                    json!({"state": "closed", "merged": false, "head": {
+                        "ref": ([AMENDED, "feature/wip", "feature/done"][i % 3]), "sha": "stale"
+                    }})
+                })
+                .collect::<Vec<_>>()
+        } else if request.path.ends_with("page=2") {
+            // A later page must still be read when closed evidence already matches the tip.
+            vec![
+                json!({"state": "closed", "merged": false, "head": {"ref": AMENDED, "sha": head}});
+                50
+            ]
+        } else {
+            assert!(request.path.ends_with("page=3"));
+            vec![json!({"state": "closed", "merged": true, "head": {"ref": AMENDED, "sha": head}})]
+        };
+        (200, json!(page).to_string())
+    });
+    let run = wipe(dir.path(), &forge.url, &[], &["--forge"]);
+    assert!(run.success, "{:?}", run.json);
+    assert_eq!(run.reason(AMENDED).as_deref(), Some("pr-merged"));
+    assert_eq!(forge.requests().len(), 3);
 }
 
 // ── Reporting ────────────────────────────────────────────────────────
@@ -724,7 +1085,11 @@ fn protected_tracking_selects_the_parent_project_for_github_and_gitlab() {
                     .unwrap()
                     .contains(&json!("pr-merged"))
         }));
-        assert_eq!(forge.requests().len(), 2, "{host}");
+        assert_eq!(
+            forge.requests().len(),
+            if host == "github.com" { 2 } else { 4 },
+            "{host}"
+        );
 
         // Remote evidence must be checked against the fork's tip, not the local tip.
         git(

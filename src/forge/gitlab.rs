@@ -1,11 +1,13 @@
 //! GitLab (gitlab.com and self-managed), over GraphQL.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
 use super::http;
-use super::{Forge, ForgeError, RemoteUrl, token_from_env};
+use super::{
+    FinishedHeads, Forge, ForgeError, RemoteUrl, RequestHead, RequestState, token_from_env,
+};
 
 /// Source branches per request.
 const BATCH: usize = 50;
@@ -14,9 +16,9 @@ const BATCH: usize = 50;
 /// `BATCH` branches rarely has more than a page of merge requests.
 const MAX_PAGES: usize = 10;
 
-const QUERY: &str = "query($path: ID!, $branches: [String!], $after: String) { \
+const QUERY: &str = "query($path: ID!, $branches: [String!], $after: String, $state: MergeRequestState!) { \
     project(fullPath: $path) { \
-        mergeRequests(state: merged, sourceBranches: $branches, first: 100, after: $after) { \
+        mergeRequests(state: $state, sourceBranches: $branches, first: 100, after: $after) { \
             nodes { sourceBranch diffHeadSha } \
             pageInfo { hasNextPage endCursor } \
         } \
@@ -45,32 +47,36 @@ impl Forge for GitLab {
     }
 
     /// Public projects answer anonymously; a token widens that to private ones.
-    fn merged_heads(
-        &self,
-        branches: &[&str],
-    ) -> Result<HashMap<String, HashSet<String>>, ForgeError> {
+    fn finished_heads(&self, branches: &[&str]) -> Result<FinishedHeads, ForgeError> {
         let token = token_from_env(&["GITLAB_TOKEN", "GL_TOKEN"]);
-        let mut found: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut found = HashMap::new();
 
         for chunk in branches.chunks(BATCH) {
-            let mut after = Value::Null;
-            for _ in 0..MAX_PAGES {
-                let variables = json!({
-                    "path": self.project.path,
-                    "branches": chunk,
-                    "after": after,
-                });
-                let data = http::graphql(
-                    &self.agent,
-                    &self.endpoint(),
-                    token.as_deref(),
-                    QUERY,
-                    variables,
-                )?;
-                let next = parse_page(&data, &mut found)?;
-                match next {
-                    Some(cursor) => after = Value::String(cursor),
-                    None => break,
+            // GitLab accepts one state per connection; each scan needs its own cursor.
+            for (filter, state) in [
+                ("merged", RequestState::Merged),
+                ("closed", RequestState::Closed),
+            ] {
+                let mut after = Value::Null;
+                for _ in 0..MAX_PAGES {
+                    let variables = json!({
+                        "path": self.project.path,
+                        "branches": chunk,
+                        "after": after,
+                        "state": filter,
+                    });
+                    let data = http::graphql(
+                        &self.agent,
+                        &self.endpoint(),
+                        token.as_deref(),
+                        QUERY,
+                        variables,
+                    )?;
+                    let next = parse_page(&data, state, &mut found)?;
+                    match next {
+                        Some(cursor) => after = Value::String(cursor),
+                        None => break,
+                    }
                 }
             }
         }
@@ -82,7 +88,8 @@ impl Forge for GitLab {
 /// page, if there is one.
 fn parse_page(
     data: &Value,
-    found: &mut HashMap<String, HashSet<String>>,
+    state: RequestState,
+    found: &mut FinishedHeads,
 ) -> Result<Option<String>, ForgeError> {
     let connection = data
         .get("project")
@@ -103,7 +110,10 @@ fn parse_page(
             found
                 .entry(branch.to_string())
                 .or_default()
-                .insert(head.to_string());
+                .insert(RequestHead {
+                    sha: head.to_string(),
+                    state,
+                });
         }
     }
 
@@ -122,6 +132,7 @@ fn parse_page(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn page_collects_heads_and_the_next_cursor() {
@@ -135,12 +146,21 @@ mod tests {
         }}});
         let mut found = HashMap::new();
         assert_eq!(
-            parse_page(&data, &mut found).unwrap(),
+            parse_page(&data, RequestState::Merged, &mut found).unwrap(),
             Some("abc".to_string())
         );
         assert_eq!(
             found["a"],
-            HashSet::from(["111".to_string(), "222".to_string()])
+            HashSet::from([
+                RequestHead {
+                    sha: "111".into(),
+                    state: RequestState::Merged
+                },
+                RequestHead {
+                    sha: "222".into(),
+                    state: RequestState::Merged
+                },
+            ])
         );
         assert!(!found.contains_key("b"));
     }
@@ -151,12 +171,15 @@ mod tests {
             "nodes": [],
             "pageInfo": {"hasNextPage": false, "endCursor": "abc"},
         }}});
-        assert_eq!(parse_page(&data, &mut HashMap::new()).unwrap(), None);
+        assert_eq!(
+            parse_page(&data, RequestState::Closed, &mut HashMap::new()).unwrap(),
+            None
+        );
     }
 
     #[test]
     fn a_missing_project_is_an_error() {
         let data = json!({"project": null});
-        assert!(parse_page(&data, &mut HashMap::new()).is_err());
+        assert!(parse_page(&data, RequestState::Merged, &mut HashMap::new()).is_err());
     }
 }

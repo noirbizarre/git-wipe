@@ -90,7 +90,7 @@ impl fmt::Display for ForgeKind {
     }
 }
 
-/// Whether, and how, the forge is consulted to detect merged branches.
+/// Whether, and how, the forge is consulted to detect finished requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ForgeSetting {
     /// Never contact a forge. The default.

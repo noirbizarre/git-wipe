@@ -65,7 +65,7 @@ pub struct Cli {
     /// These branches are always listed for interactive selection. A deleted
     /// upstream does not prove the branch was merged, so they are only taken
     /// non-interactively with this flag; interactively they are pre-selected
-    /// unless a forge is consulted and does not report them as merged.
+    /// unless a forge is consulted and does not report a merged or closed request.
     /// Requires up-to-date remote-tracking refs, so it has no effect when
     /// --no-fetch is used outside of --dry-run.
     #[arg(long)]
@@ -141,18 +141,19 @@ pub struct Cli {
     #[arg(long, overrides_with = "worktrunk")]
     pub no_worktrunk: bool,
 
-    /// Ask the forge which branches were merged, before trying git (networked)
+    /// Ask the forge which requests were merged or closed, before trying git (networked)
     ///
     /// Squash and rebase merges rewrite history, so git can only guess at them.
     /// The forge knows: with this flag, the pull/merge request state of each
     /// branch is looked up first, and only the branches it cannot settle go
     /// through the offline strategies. Branches it settles are reported as
-    /// `pr-merged`.
+    /// `pr-merged` or `pr-closed`. Closed-unmerged requests qualify for the same
+    /// cleanup, including worktrees and remote branches.
     ///
     /// Without a value the forge is identified from each remote URL (GitHub,
     /// GitLab, Gitea and Forgejo). Pass `--forge=<KIND>` (github, gitlab,
     /// gitea or forgejo) for a self-hosted instance whose host name does not
-    /// give it away. A branch only counts as merged if the request ended exactly at
+    /// give it away. A branch only qualifies if the request ended exactly at
     /// the branch tip.
     ///
     /// This sends branch names to the forge. Tokens come from the environment,
@@ -174,7 +175,7 @@ pub struct Cli {
     )]
     pub forge: Option<ForgeSetting>,
 
-    /// Repository to query for merged requests (repeat for several)
+    /// Repository to query for merged or closed requests (repeat for several)
     ///
     /// Accepts a Git remote name or repository URL. Replaces wipe.forgeRepo.
     /// By default, uses the tracking remotes of protected branches, otherwise
@@ -306,7 +307,7 @@ pub enum ConfigAction {
         name: String,
     },
 
-    /// Add a repository to query for merged requests
+    /// Add a repository to query for merged or closed requests
     AddForgeRepo {
         /// Git remote name or repository URL
         repository: String,

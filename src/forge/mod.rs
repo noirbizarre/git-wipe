@@ -8,7 +8,7 @@
 //! Three layers, from the outside in:
 //!
 //! - [`ForgeSource`] is what merge detection depends on: given a repository and
-//!   candidate tips, which branches have a merged pull/merge request? It knows
+//!   candidate tips, which branches have a merged or closed pull/merge request? It knows
 //!   nothing of providers or transports, so detection is tested with fakes.
 //! - [`RemoteForges`] implements it for a real repository: one provider per
 //!   selected repository, picked from a remote name or URL, with answers cached
@@ -88,20 +88,33 @@ impl fmt::Display for ForgeError {
 
 impl std::error::Error for ForgeError {}
 
-/// A forge provider: the canonical interface merge detection relies on.
+/// A terminal request state that qualifies a matching branch tip for cleanup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RequestState {
+    Closed,
+    // A matching merge is stronger evidence than a matching abandoned request.
+    Merged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RequestHead {
+    pub sha: String,
+    pub state: RequestState,
+}
+
+pub type FinishedHeads = HashMap<String, HashSet<RequestHead>>;
+
+/// A forge provider: the canonical interface request detection relies on.
 pub trait Forge: Send + Sync {
     /// A short description for messages, e.g. `GitHub noirbizarre/git-wipe`.
     fn describe(&self) -> String;
 
-    /// For each of `branches`, the head commits of its *merged* pull/merge
+    /// For each of `branches`, the head commits and states of its finished pull/merge
     /// requests.
     ///
-    /// A branch with no merged request is simply absent from the result: that
+    /// A branch with no finished request is simply absent from the result: that
     /// is "not found", not a failure. Batching is the provider's business.
-    fn merged_heads(
-        &self,
-        branches: &[&str],
-    ) -> Result<HashMap<String, HashSet<String>>, ForgeError>;
+    fn finished_heads(&self, branches: &[&str]) -> Result<FinishedHeads, ForgeError>;
 }
 
 /// The first non-empty value among the environment variables `names`.
@@ -184,10 +197,10 @@ pub fn detect_urls(urls: &[(String, String)]) -> Vec<Detection> {
 /// What a forge said about the branches of one remote.
 #[derive(Debug, Clone)]
 pub enum ForgeOutcome {
-    /// The forge answered. The set holds the branches whose merged pull/merge
+    /// The forge answered. The map holds the branches whose finished pull/merge
     /// request ended exactly at the branch tip; every other branch is "not
     /// found" and left to the git strategies.
-    Resolved(HashSet<String>),
+    Resolved(HashMap<String, RequestState>),
     /// No provider fits this remote. Not worth a warning on its own.
     Unsupported(String),
     /// The forge could not be consulted. Worth a warning, then git alone.
@@ -207,19 +220,19 @@ pub trait ForgeSource: Sync {
     }
 
     /// Among `tips` (branch name to tip commit), the branches of `remote`
-    /// whose pull/merge request was merged at that very commit.
+    /// whose pull/merge request finished at that very commit.
     ///
     /// Matching the commit, not just the name, is what keeps a branch that was
-    /// reused or advanced after its merge from being reported as merged.
-    fn pr_merged(&self, remote: &str, tips: &HashMap<String, String>) -> ForgeOutcome;
+    /// reused or advanced after closure from being offered for cleanup.
+    fn finished_requests(&self, remote: &str, tips: &HashMap<String, String>) -> ForgeOutcome;
 }
 
 /// A remote's forge, with what it has already told us.
 enum Slot {
     Ready {
         forge: Box<dyn Forge>,
-        /// Branch to the head commits of its merged requests.
-        heads: HashMap<String, HashSet<String>>,
+        /// Preserve states and all heads so every namespace checks its own tip.
+        heads: FinishedHeads,
         /// Branches already asked about, found or not.
         asked: HashSet<String>,
     },
@@ -281,7 +294,7 @@ impl ForgeSource for RemoteForges {
         !self.selection_warned.swap(true, Ordering::Relaxed)
     }
 
-    fn pr_merged(&self, remote: &str, tips: &HashMap<String, String>) -> ForgeOutcome {
+    fn finished_requests(&self, remote: &str, tips: &HashMap<String, String>) -> ForgeOutcome {
         let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
         let Some(slot) = slots.get_mut(remote) else {
             return ForgeOutcome::Unsupported(format!("unknown remote '{remote}'"));
@@ -305,7 +318,7 @@ impl ForgeSource for RemoteForges {
                 let result = if missing.is_empty() {
                     Ok(HashMap::new())
                 } else {
-                    forge.merged_heads(&missing)
+                    forge.finished_heads(&missing)
                 };
                 match result {
                     Ok(found) => {
@@ -313,10 +326,15 @@ impl ForgeSource for RemoteForges {
                         heads.extend(found);
                         let merged = tips
                             .iter()
-                            .filter(|(branch, sha)| {
-                                heads.get(*branch).is_some_and(|shas| shas.contains(*sha))
+                            .filter_map(|(branch, sha)| {
+                                let state = heads
+                                    .get(branch)?
+                                    .iter()
+                                    .filter(|head| &head.sha == sha)
+                                    .map(|head| head.state)
+                                    .max()?;
+                                Some((branch.clone(), state))
                             })
-                            .map(|(branch, _)| branch.clone())
                             .collect();
                         return ForgeOutcome::Resolved(merged);
                     }
@@ -339,7 +357,7 @@ mod tests {
 
     /// A provider answering from a table.
     struct Fake {
-        merged: HashMap<String, HashSet<String>>,
+        merged: FinishedHeads,
         fail: Option<ForgeError>,
     }
 
@@ -348,10 +366,7 @@ mod tests {
             "Fake o/r".to_string()
         }
 
-        fn merged_heads(
-            &self,
-            branches: &[&str],
-        ) -> Result<HashMap<String, HashSet<String>>, ForgeError> {
+        fn finished_heads(&self, branches: &[&str]) -> Result<FinishedHeads, ForgeError> {
             if let Some(error) = &self.fail {
                 return Err(error.clone());
             }
@@ -391,7 +406,15 @@ mod tests {
         Fake {
             merged: merged
                 .iter()
-                .map(|(b, s)| (b.to_string(), HashSet::from([s.to_string()])))
+                .map(|(b, s)| {
+                    (
+                        b.to_string(),
+                        HashSet::from([RequestHead {
+                            sha: s.to_string(),
+                            state: RequestState::Merged,
+                        }]),
+                    )
+                })
                 .collect(),
             fail: None,
         }
@@ -401,11 +424,40 @@ mod tests {
     fn only_a_matching_tip_counts_as_merged() {
         let forges = forges_with(fake(&[("a", "111"), ("b", "222")]));
         let ForgeOutcome::Resolved(found) =
-            forges.pr_merged("origin", &tips(&[("a", "111"), ("b", "999"), ("c", "333")]))
+            forges.finished_requests("origin", &tips(&[("a", "111"), ("b", "999"), ("c", "333")]))
         else {
             panic!("expected a resolution");
         };
-        assert_eq!(found, HashSet::from(["a".to_string()]));
+        assert_eq!(
+            found,
+            HashMap::from([("a".to_string(), RequestState::Merged)])
+        );
+    }
+
+    #[test]
+    fn matching_heads_choose_merged_before_closed_without_trusting_a_stale_merge() {
+        let mut provider = fake(&[("a", "old")]);
+        provider.merged.get_mut("a").unwrap().insert(RequestHead {
+            sha: "current".into(),
+            state: RequestState::Closed,
+        });
+        provider.merged.get_mut("a").unwrap().insert(RequestHead {
+            sha: "old".into(),
+            state: RequestState::Closed,
+        });
+        let forges = forges_with(provider);
+        for (sha, expected) in [
+            ("current", Some(RequestState::Closed)),
+            ("old", Some(RequestState::Merged)),
+            ("advanced", None),
+        ] {
+            let ForgeOutcome::Resolved(found) =
+                forges.finished_requests("origin", &tips(&[("a", sha)]))
+            else {
+                panic!("expected a resolution")
+            };
+            assert_eq!(found.get("a").copied(), expected);
+        }
     }
 
     #[test]
@@ -417,10 +469,7 @@ mod tests {
             fn describe(&self) -> String {
                 "Counting".into()
             }
-            fn merged_heads(
-                &self,
-                _: &[&str],
-            ) -> Result<HashMap<String, HashSet<String>>, ForgeError> {
+            fn finished_heads(&self, _: &[&str]) -> Result<FinishedHeads, ForgeError> {
                 self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(HashMap::new())
             }
@@ -441,10 +490,10 @@ mod tests {
             slots: Mutex::new(slots),
         };
         let t = tips(&[("a", "1"), ("b", "2")]);
-        forges.pr_merged("origin", &t);
-        forges.pr_merged("origin", &t);
+        forges.finished_requests("origin", &t);
+        forges.finished_requests("origin", &t);
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
-        forges.pr_merged("origin", &tips(&[("a", "1"), ("c", "3")]));
+        forges.finished_requests("origin", &tips(&[("a", "1"), ("c", "3")]));
         assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
@@ -455,13 +504,13 @@ mod tests {
             ..fake(&[])
         });
         let t = tips(&[("a", "1")]);
-        let ForgeOutcome::Unavailable(error) = forges.pr_merged("origin", &t) else {
+        let ForgeOutcome::Unavailable(error) = forges.finished_requests("origin", &t) else {
             panic!("expected a failure");
         };
         assert_eq!(error.kind, ForgeErrorKind::Network);
         assert_eq!(error.message, "Fake o/r: timed out");
         assert!(matches!(
-            forges.pr_merged("origin", &t),
+            forges.finished_requests("origin", &t),
             ForgeOutcome::PreviouslyUnavailable
         ));
     }
@@ -470,11 +519,11 @@ mod tests {
     fn unsupported_and_unknown_remotes_are_reported_as_such() {
         let forges = forges_with(fake(&[]));
         assert!(matches!(
-            forges.pr_merged("odd", &tips(&[("a", "1")])),
+            forges.finished_requests("odd", &tips(&[("a", "1")])),
             ForgeOutcome::Unsupported(reason) if reason == "odd host"
         ));
         assert!(matches!(
-            forges.pr_merged("nope", &tips(&[("a", "1")])),
+            forges.finished_requests("nope", &tips(&[("a", "1")])),
             ForgeOutcome::Unsupported(_)
         ));
     }

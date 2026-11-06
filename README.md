@@ -50,7 +50,7 @@ configured remotes. It also handles orphaned worktree cleanup.
   three-dot diff, patch-ID matching, simulated merge, squash-merge detection, and deleted-upstream detection)
 - Tunable detection thoroughness with `--effort <1-3>` (speed vs accuracy)
 - Optional, opt-in forge lookup (`--forge`): GitHub, GitLab, Gitea and Forgejo are asked whether a branch's
-  pull/merge request was merged, which is the only exact answer for squash and rebase merges -- networked, never on
+  pull/merge request was merged or closed, including squash and rebase merges -- networked, never on
   by default, and never fatal
 - Parallel analysis (`--jobs`, defaults to the CPU count) with byte-identical results at any job count
 - Automatic fast-forward of target branches before detection (with `--no-pull` to skip)
@@ -215,13 +215,14 @@ Statuses combine, and are rendered most-actionable first:
 | `locked` | The worktree is locked (`git worktree lock`) |
 | `merged` | Detected as merged into a protected branch, using the same strategies as a wipe run |
 | `pr-merged` | Merged according to the forge (only with `--forge`); shown in place of `merged` |
+| `pr-closed` | Closed without merging according to the forge (only with `--forge`); eligible for the same cleanup as `pr-merged` |
 | `gone` | The configured upstream no longer exists |
 | `unmerged` | Holds commits absent from every merge target |
 | `dirty` | The working tree has uncommitted changes |
 | `clean` | The working tree has no uncommitted change |
 
-`merged` (or `pr-merged`) and `unmerged` are exclusive, as are `clean` and
-`dirty`. `--merged` keeps both kinds of merged entry. A branch
+`merged` (or `pr-merged`/`pr-closed`) and `unmerged` are exclusive, as are `clean` and
+`dirty`. `--merged` keeps Git-merged, `pr-merged` and `pr-closed` entries. A branch
 without a worktree gets neither `clean` nor `dirty` — there is no working tree
 to inspect.
 
@@ -290,16 +291,20 @@ that has never been configured is an error rather than a setup wizard (run
 | `jobs` | The effective number of concurrent git probes used during analysis |
 | `fetch` | Phase 1: per-remote fetch/prune outcome, with `skipped` set under `--no-fetch` |
 | `pull` | Phase 2: per-branch fast-forward outcome, with `skipped` set under `--no-pull` |
-| `local` | Phase 3: `merged`/`gone` candidates (`pr_merged` lists the ones the forge settled), plus per-branch and per-worktree outcomes; `skipped` is set under `--remote-only` |
+| `local` | Phase 3: `merged`/`gone` candidates (`pr_merged` and `pr_closed` list the forge-confirmed subsets), plus per-branch and per-worktree outcomes; `skipped` is set under `--remote-only` |
 | `remotes_skipped` | Whether `--local-only` skipped phase 4 |
-| `remotes` | Phase 4: merged branches (and the `pr_merged` subset) and deletion outcome per remote |
+| `remotes` | Phase 4: cleanup candidates (and the `pr_merged`/`pr_closed` subsets) and deletion outcome per remote |
 | `warnings` | Non-fatal messages surfaced during the run |
 | `errors` | Failed operations, each with `action`, `target`, `kind` (`network`, `auth`, `other`) and `message` |
 | `summary` | `local_branches_deleted`, `remote_branches_deleted`, `worktrees_removed`, `errors`, `freed_kb` (bytes freed by removed worktrees, in kibibytes; zero unless `--min-size`/`--size` was given) |
 
-Each local and remote branch entry carries a `reason`: `merged`, `gone`, or
-`pr-merged` when the forge reported its pull/merge request as merged (see
-[Forge detection](#forge-detection)).
+Each local and remote branch entry carries a `reason`: `merged`, `gone`,
+`pr-merged` or `pr-closed` (see [Forge detection](#forge-detection)). The historical
+`merged` candidate arrays include Git-detected merges and both kinds of
+forge-confirmed candidates; `pr_merged` and `pr_closed` distinguish the latter.
+For example, a closed request can appear as
+`{"branch":"feature/abandoned","reason":"pr-closed","selected":true,"status":"dry_run"}`
+in `local.branches`, with `"feature/abandoned"` in `local.pr_closed`.
 
 Item statuses are `updated`, `deleted`, `removed`, `skipped`, `locked`,
 `too_young`, `too_small`, `failed` or `dry_run`. A fatal error still yields a
@@ -414,13 +419,13 @@ to the repository-local `.git/config`:
 | `protected` | multi-value | Glob patterns for branches that should never be deleted |
 | `ignore` | multi-value | Glob patterns for branches git-wipe ignores entirely |
 | `remote` | multi-value | Remotes to delete branches from (omit for all remotes) |
-| `forgeRepo` | multi-value | Remote names or repository URLs to query for merged requests. Omit to infer from protected branches' tracking remotes; repeat `--forge-repo` to override the list |
+| `forgeRepo` | multi-value | Remote names or repository URLs to query for merged or closed requests. Omit to infer from protected branches' tracking remotes; repeat `--forge-repo` to override the list |
 | `worktrunk` | bool (`true`/`false`, `yes`/`no`, `on`/`off`, `1`/`0`) | Enable/disable [worktrunk](https://worktrunk.dev) for worktree removal. When omitted, auto-detects (see below) |
 | `effort` | `1`-`3` | How thorough merge detection should be. Defaults to `2`; `--effort` overrides it |
 | `minage` | duration | Minimum age a worktree must have before it may be removed, e.g. `30s`, `2h`, `7d`. Defaults to `0s` (no guard); `--min-age` overrides it |
 | `minsize` | size | Minimum on-disk size a worktree must have before it may be removed, e.g. `512B`, `100K`, `100M`, `2G`. Defaults to `0B` (no guard); `--min-size` overrides it |
 | `jobs` | integer >= 1 | How many read-only git probes analysis may run at once. Defaults to the CPU count; `--jobs` overrides it, `--verbose` forces `1` |
-| `forge` | `true`, `false` or a forge name | Ask the forge about merged pull/merge requests before trying git (see [Forge detection](#forge-detection)). `true` (also `on`, `yes`, `1`, `auto`) identifies the forge from each remote URL; `false` (also `off`, `no`, `0`) disables it; `github`, `gitlab`, `gitea`, `forgejo` (or its alias `codeberg`) forces a kind for self-hosted instances whose host name does not give it away. Off when omitted; `--forge` enables it and `--no-forge` disables it |
+| `forge` | `true`, `false` or a forge name | Ask the forge about merged or closed pull/merge requests before trying git (see [Forge detection](#forge-detection)). `true` (also `on`, `yes`, `1`, `auto`) identifies the forge from each remote URL; `false` (also `off`, `no`, `0`) disables it; `github`, `gitlab`, `gitea`, `forgejo` (or its alias `codeberg`) forces a kind for self-hosted instances whose host name does not give it away. Off when omitted; `--forge` enables it and `--no-forge` disables it |
 
 When `worktrunk` is unset, git-wipe enables it only if the repository has a
 `[worktrunk]` config section **and** `wt` is on `$PATH`; it then asks once per
@@ -477,10 +482,16 @@ only that follow-up fails, the fetch still counts and a warning is reported.
 Squash and rebase merges rewrite history, so a merged branch is not an ancestor
 of the target and git can only guess at it. The forge knows exactly. With
 `--forge` (or `wipe.forge`), git-wipe asks it **first**: a branch whose
-pull/merge request was merged is reported as `pr-merged`, and only the branches
-the forge could not settle go through the offline strategies. That is usually
+pull/merge request was merged is reported as `pr-merged`, or `pr-closed` if it
+was closed without merging. Only the branches the forge could not settle go
+through the offline strategies. That is usually
 cheaper than the effort 3 strategies, and it is the only exact answer when a
 squash was amended in review or merged after a conflict resolution.
+
+Closed requests qualify for the same cleanup as merged requests on every supported
+forge, even when their commits were never merged. Their local and remote branches
+and associated worktrees are preselected in the same way; `--yes` accepts them.
+The usual branch protection and worktree safeguards still apply.
 
 ```sh
 # One run
@@ -559,15 +570,19 @@ A token only needs read access to pull/merge requests. GitHub tokens are never
 offered to a host other than `github.com`, except through the Enterprise
 variables.
 
-**A branch only counts as `pr-merged` if the pull/merge request ended exactly at
-the branch's current tip.** A branch name reused after a merge, or advanced
+**A branch only counts as `pr-merged` or `pr-closed` if the pull/merge request ended exactly at
+the branch's current tip.** A branch name reused after a merge or closure, or advanced
 since, is not reported, and git judges it as usual.
+Among retrieved requests, when both a merged and a closed request match the
+current tip, `pr-merged` wins. Any retrieved matching finished request qualifies;
+another open request does not veto it.
 
 **Forge API failures never make a run fail.** Whatever it cannot answer is left to the
 offline strategies, which behave exactly as without `--forge`:
 
-- *Resolved*: the request was merged at the tip; the branch is `pr-merged`.
-- *Not found*: no merged request, or one ending elsewhere; git decides.
+- *Resolved*: the request was merged or closed at the tip; the branch is
+  `pr-merged` or `pr-closed` respectively.
+- *Not found*: no merged or closed request, or one ending elsewhere; git decides.
 - *Unsupported*: no usable repository can be inferred; git decides, with one
   warning suggesting an explicit selector.
 - *Unavailable*: network error, rejected or missing credentials, timeout (5s to
@@ -575,7 +590,10 @@ offline strategies, which behave exactly as without `--forge`:
   cause, then git decides.
 
 Requests are batched (about 40 branches per GitHub request, 50 per GitLab
-request), so a run costs a handful of calls rather than one per branch. Gitea
+request, with separate paginated merged and closed scans on GitLab), so a run
+costs a handful of calls rather than one per branch. GitHub inspects up to 20
+merged and 20 closed-unmerged requests per branch, with separate limits so closed
+requests do not displace merged evidence. Gitea
 and Forgejo have no branch filter, so their 500 most recently updated closed
 pull requests are searched; branches older than that fall back to git.
 
@@ -703,7 +721,7 @@ CLI flags:
    longer exists locally). Orphan worktrees default to unselected.
    Without a forge, merged and deleted-upstream branches default to selected,
    except those whose worktree has uncommitted changes. When the forge is
-   consulted and answers, it is the authority: only `pr-merged` branches
+   consulted and answers, it is the authority: only `pr-merged` and `pr-closed` branches
    default to selected (locally and on remotes), and branches found by git
    alone are listed unchecked. If the forge cannot be reached, the
    no-forge rules apply.
@@ -799,7 +817,7 @@ flowchart TD
 
     LocalCheck{--remote-only?}
     LocalCheck -- No --> FindLocal[Find merged local branches\n+ orphan worktrees]
-    FindLocal --> ForgeAsk["Forge lookup, first\nPR/MR merged at the tip\n(--forge, networked)"]
+    FindLocal --> ForgeAsk["Forge lookup, first\nPR/MR merged or closed at the tip\n(--forge, networked)"]
     FindLocal --> Merged["Standard detection\ngit branch --merged\n(effort 1+)"]
     FindLocal --> Cherry["Rebase-aware detection\ngit cherry\n(effort 2+)"]
     FindLocal --> TreeSHA["Tree SHA comparison\n(effort 2+)"]
