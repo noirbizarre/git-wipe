@@ -39,3 +39,7 @@ site/
 # not be shared. Already covered by the global `mise.*.toml`, but stated here so
 # the intent survives a developer who has no global ignore at all.
 mise.local.toml
+
+# --- project-specific ---------------------------------------------------
+# Publication runs after asset staging; keep binaries out of Cargo's package inputs.
+/stage
