@@ -149,7 +149,7 @@ git wipe --yes
 # Also delete branches whose upstream branch was deleted
 git wipe -y --delete-gone
 
-# Also force-remove worktrees with uncommitted changes or unmerged commits
+# Also force-remove selected dirty worktrees with uncommitted changes
 git wipe -y --force
 
 # Machine-readable output (implies --yes)
