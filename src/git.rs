@@ -1135,6 +1135,19 @@ impl Git {
         }
     }
 
+    /// Local edits must not copy effective inherited values into this scope.
+    fn config_get_all_local(&self, key: &str) -> Result<Vec<String>> {
+        match self.run(&["config", "--local", "--get-all", key]) {
+            Ok(out) => Ok(out
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect()),
+            Err(e) if is_unset_key(&e) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Get a single config value.
     pub fn config_get(&self, key: &str) -> Result<Option<String>> {
         match self.run(&["config", "--get", key]) {
@@ -1186,10 +1199,15 @@ impl Git {
     /// values, drop the matching ones, clear the key and re-add the rest in
     /// their original order. Removing a value that is not present is a no-op.
     pub fn config_remove_value(&self, key: &str, value: &str) -> Result<()> {
-        let mut values = self.config_get_all(key)?;
+        let mut values = self.config_get_all_local(key)?;
         let before = values.len();
         values.retain(|v| v != value);
         if values.len() == before {
+            if self.config_get_all(key)?.iter().any(|v| v == value) {
+                anyhow::bail!(
+                    "{key} = {value} is inherited, not repository-local; use `git config --show-origin --get-all {key}` to locate and edit its source"
+                );
+            }
             return Ok(());
         }
 

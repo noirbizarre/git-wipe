@@ -94,6 +94,45 @@ fn version_flag_shows_version() {
 // ── Config subcommands ───────────────────────────────────────────────
 
 #[test]
+fn removing_local_config_does_not_copy_or_claim_to_remove_inherited_values() {
+    let dir = init_repo();
+    let global = dir.path().join("global-config");
+    std::fs::write(&global, "[wipe]\nprotected = main\n").unwrap();
+    assert!(
+        StdCommand::new("git")
+            .args(["config", "--local", "--add", "wipe.protected", "release/*"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut cmd = Command::cargo_bin("git-wipe").unwrap();
+    cmd.current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["config", "remove-protected", "release/*"])
+        .assert()
+        .success();
+    let local = StdCommand::new("git")
+        .args(["config", "--local", "--get-all", "wipe.protected"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        local.stdout.is_empty(),
+        "inherited main must not become local"
+    );
+    let mut cmd = Command::cargo_bin("git-wipe").unwrap();
+    cmd.current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["config", "remove-protected", "main"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("inherited"));
+}
+
+#[test]
 fn config_list_no_config() {
     let dir = init_repo();
     Command::cargo_bin("git-wipe")
