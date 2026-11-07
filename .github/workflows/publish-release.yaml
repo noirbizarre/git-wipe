@@ -56,14 +56,13 @@ jobs:
           # Every matrix leg uses the immutable run commit, even if a tag or main moves later.
           ref: ${{ github.sha }}
           persist-credentials: false
-      # Setup precedes caches so their post-save hooks run before the drive is dismounted.
-      - name: Tune Windows runner
-        uses: ./.github/actions/setup-windows
-        if: runner.os == 'Windows'
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.build.target }}
+      # Bootstrap the toolchain before relocating temporary storage, but keep cache cleanup before drive teardown.
+      - name: Tune Windows runner
+        uses: ./.github/actions/setup-windows
+        if: runner.os == 'Windows'
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.build.target }}
