@@ -1582,15 +1582,17 @@ mod tests {
     #[test]
     fn worktree_filenames_preserve_bytes_and_display_special_characters() -> Result<()> {
         let (dir, git) = crate::test_helpers::init_repo()?;
-        let mut names = vec![PathBuf::from("é file.txt"), PathBuf::from(" space .txt")];
+        let names = vec![PathBuf::from("é file.txt"), PathBuf::from(" space .txt")];
         #[cfg(unix)]
-        {
+        let names = {
             use std::os::unix::ffi::OsStringExt;
+            let mut names = names;
             names.push(PathBuf::from("quote\"tab\tnewline\n.txt"));
             names.push(PathBuf::from(std::ffi::OsString::from_vec(
                 b"nonutf8\xff".to_vec(),
             )));
-        }
+            names
+        };
         for name in &names {
             std::fs::write(dir.path().join(name), "recent content")?;
         }
