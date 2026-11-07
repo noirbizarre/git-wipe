@@ -331,6 +331,15 @@ impl Config {
     /// When re-run on an already configured repository, the settings the
     /// wizard does not ask about are carried over rather than reset.
     pub fn interactive_setup(git: &Git, ui: &Ui) -> Result<Self> {
+        Self::collect_setup(git, ui, true)
+    }
+
+    /// Preview setup must supply analysis settings without persisting them.
+    pub fn preview_setup(git: &Git, ui: &Ui) -> Result<Self> {
+        Self::collect_setup(git, ui, false)
+    }
+
+    fn collect_setup(git: &Git, ui: &Ui, persist: bool) -> Result<Self> {
         // An unreadable existing configuration must not lock the user out of
         // the very command that rewrites it.
         let existing = Self::try_load(git).ok().flatten();
@@ -458,14 +467,22 @@ impl Config {
             // Setup does not prompt for destination overrides; retain power-user settings.
             forge_repos: existing.as_ref().and_then(|c| c.forge_repos.clone()),
         };
-        config.save(git)?;
-
-        ui.success(&format!(
-            "Configuration saved to git config [{SECTION}] section."
-        ));
+        config.finish_setup(git, ui, persist)?;
         ui.blank();
 
         Ok(config)
+    }
+
+    fn finish_setup(&self, git: &Git, ui: &Ui, persist: bool) -> Result<()> {
+        if persist {
+            self.save(git)?;
+            ui.success(&format!(
+                "Configuration saved to git config [{SECTION}] section."
+            ));
+        } else {
+            ui.dry_run("Using setup answers for this preview only; configuration was not saved.");
+        }
+        Ok(())
     }
 }
 
@@ -640,6 +657,23 @@ pub fn load_or_setup(git: &Git, ui: &Ui) -> Result<Config> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_setup_preserves_configuration_and_live_setup_saves_answers() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        let path = dir.path().join(".git/config");
+        let before = std::fs::read(&path)?;
+        let cfg = Config {
+            protected: vec!["release/*".into()],
+            ..Config::default()
+        };
+        cfg.finish_setup(&git, &Ui::new(), false)?;
+        assert_eq!(std::fs::read(&path)?, before);
+        assert_eq!(cfg.protected, ["release/*"]);
+        cfg.finish_setup(&git, &Ui::new(), true)?;
+        assert_eq!(Config::try_load(&git)?.unwrap().protected, cfg.protected);
+        Ok(())
+    }
 
     #[test]
     fn validate_value_accepts_what_try_load_accepts() {

@@ -508,6 +508,11 @@ fn handle_clean(git: &git::Git, ui: &ui::Ui, cli: &Cli) -> Result<()> {
                  Run `git wipe` once interactively to complete the setup wizard."
             )
         })?
+    } else if cli.dry_run {
+        match config::Config::try_load(git)? {
+            Some(cfg) => cfg,
+            None => config::Config::preview_setup(git, ui)?,
+        }
     } else {
         config::load_or_setup(git, ui)?
     };
