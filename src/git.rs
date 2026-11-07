@@ -774,7 +774,37 @@ impl Git {
     /// error. Requires `git >= 2.38` for the `--write-tree` option.
     pub fn merge_adds_nothing(&self, target: &str, branch: &str) -> Result<bool> {
         let args = ["merge-tree", "--write-tree", target, branch];
-        let output = self.spawn(&args)?;
+        // merge-tree writes objects even when used as an inspection. Keep
+        // those writes temporary, with the real store available read-only.
+        let objects = self.run(&[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "objects",
+        ])?;
+        let temporary = tempfile::tempdir().context("Cannot isolate simulated merge objects")?;
+        // Git's alternate list uses C-style quoting, so separators and quotes
+        // inside a repository path must not split it into multiple stores.
+        let mut alternates = std::ffi::OsString::from(serde_json::to_string(&objects)?);
+        if let Some(existing) = std::env::var_os("GIT_ALTERNATE_OBJECT_DIRECTORIES") {
+            alternates.push(if cfg!(windows) { ";" } else { ":" });
+            alternates.push(existing);
+        }
+        if self.verbose {
+            eprintln!("  $ git {} (isolated objects)", args.join(" "));
+        }
+        let mut cmd = Command::new("git");
+        cmd.args(args)
+            .env("GIT_OBJECT_DIRECTORY", temporary.path())
+            .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", alternates)
+            // Missing promisor objects must not trigger a hidden fetch.
+            .env("GIT_NO_LAZY_FETCH", "1");
+        if let Some(dir) = &self.workdir {
+            cmd.current_dir(dir);
+        }
+        let output = cmd
+            .output()
+            .context("Cannot simulate merge in isolated object storage")?;
 
         match output.status.code() {
             Some(0) => {
@@ -1003,7 +1033,8 @@ impl Git {
 
     /// Return the porcelain status of the current working directory.
     pub fn status_porcelain(&self) -> Result<String> {
-        self.run(&["status", "--porcelain"])
+        // Inventory must not refresh the index or compete for its lock.
+        self.run(&["--no-optional-locks", "status", "--porcelain"])
     }
 
     /// Check whether `branch` has at least one commit not present in **any**
@@ -1448,6 +1479,43 @@ mod tests {
             "empty followup",
         ])?;
         assert!(!git.patch_id_match(&target, &advanced)?);
+        Ok(())
+    }
+
+    #[test]
+    fn repository_inspection_preserves_the_index_and_object_store() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        git.run(&["checkout", "-b", "feature"])?;
+        std::fs::write(dir.path().join("feature.txt"), "feature")?;
+        git.run(&["add", "."])?;
+        git.run(&["commit", "-m", "feature"])?;
+        git.run(&["checkout", "main"])?;
+        std::fs::write(dir.path().join("main.txt"), "main")?;
+        git.run(&["add", "."])?;
+        git.run(&["commit", "-m", "main"])?;
+        let before_objects = git.run(&["count-objects", "-v"])?;
+        let index = dir.path().join(".git/index");
+        let before_index = std::fs::read(&index)?;
+        let before_modified = std::fs::metadata(&index)?.modified()?;
+        // Unchanged contents with fresh stat data would normally refresh index.
+        let file = dir.path().join("main.txt");
+        std::fs::write(&file, std::fs::read(&file)?)?;
+        assert!(git.status_porcelain()?.is_empty());
+        assert!(!git.merge_adds_nothing("main", "feature")?);
+        assert_eq!(git.run(&["count-objects", "-v"])?, before_objects);
+        assert_eq!(std::fs::read(&index)?, before_index);
+        assert_eq!(std::fs::metadata(&index)?.modified()?, before_modified);
+        // Linked worktrees share the object store but have a different gitdir.
+        let linked = dir.path().join("linked worktree");
+        git.run(&[
+            "worktree",
+            "add",
+            "--detach",
+            linked.to_str().unwrap(),
+            "main",
+        ])?;
+        assert!(!git.in_dir(&linked).merge_adds_nothing("main", "feature")?);
+        assert_eq!(git.run(&["count-objects", "-v"])?, before_objects);
         Ok(())
     }
 

@@ -102,6 +102,8 @@ globset = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+# Simulated merges write disposable objects instead of mutating repositories.
+tempfile = "3"
 
 # Errors & diagnostics for the template's `src/lib.rs` / `src/error.rs`
 # scaffold: `thiserror` for the typed error, `miette` to render it.
@@ -122,4 +124,3 @@ serde = "1"
 assert_cmd = "2"
 predicates = "3"
 serde_json = "1"
-tempfile = "3"
