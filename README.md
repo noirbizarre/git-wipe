@@ -753,8 +753,10 @@ CLI flags:
    `dirty + unmerged commits` hint.
 
    For selected branches that have worktrees, the worktree is removed first,
-   then the branch is deleted with `git branch -D` (force-delete is safe here
-   because the branch is already verified as merged into a protected target).
+   then the branch is deleted with `git branch -D` after selection and the
+   applicable safeguards. Git-detected or forge-confirmed merges have merge
+   evidence; closed-unmerged requests and deleted-upstream candidates may
+   contain commits absent from every protected target.
    Selected orphan worktrees are also removed in the same pass. When
    [worktrunk](https://worktrunk.dev) is enabled (via `--worktrunk` flag,
    `wipe.worktrunk` config, or auto-detection), removal is delegated to
