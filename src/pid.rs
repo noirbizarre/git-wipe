@@ -95,13 +95,28 @@ pub fn pid_is_alive(pid: u32) -> Option<bool> {
         .args(["/NH", "/FO", "CSV"])
         .output()
         .ok()?;
-    if !out.status.success() {
+    tasklist_liveness(out.status.success(), &out.stdout, pid)
+}
+
+#[cfg(any(windows, test))]
+fn tasklist_liveness(success: bool, stdout: &[u8], pid: u32) -> Option<bool> {
+    if !success {
         return None;
     }
-    let text = std::str::from_utf8(&out.stdout).ok()?;
     let mut seen = false;
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let found = line.split("\",\"").nth(1)?.parse::<u32>().ok()?;
+    // Only the PID column is ASCII. Process names may use the Windows code
+    // page, so decoding the whole inventory as UTF-8 would reject valid probes.
+    for line in stdout
+        .split(|b| *b == b'\n')
+        .filter(|line| line.iter().any(|b| !b.is_ascii_whitespace()))
+    {
+        let delimiter = line.windows(3).position(|w| w == b"\",\"")?;
+        let rest = &line[delimiter + 3..];
+        let end = rest.iter().position(|b| *b == b'"')?;
+        let found = std::str::from_utf8(&rest[..end])
+            .ok()?
+            .parse::<u32>()
+            .ok()?;
         if found == pid {
             return Some(true);
         }
@@ -119,6 +134,16 @@ pub fn pid_is_alive(_pid: u32) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_or_unparsable_windows_probes_never_confirm_death() {
+        let inventory = b"\"image,with,commas\xff.exe\",\"42\",\"Console\",\"1\",\"100 K\"\r\n";
+        assert_eq!(tasklist_liveness(true, inventory, 42), Some(true));
+        assert_eq!(tasklist_liveness(true, inventory, 43), Some(false));
+        assert_eq!(tasklist_liveness(false, inventory, 43), None);
+        assert_eq!(tasklist_liveness(true, b"", 43), None);
+        assert_eq!(tasklist_liveness(true, b"malformed response", 43), None);
+    }
 
     #[cfg(unix)]
     #[test]
