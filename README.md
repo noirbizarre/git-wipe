@@ -886,20 +886,21 @@ locally; without them the first feedback comes from CI.
 
 ```sh
 mise run build          # Build the project
-mise run build:release  # Build in release mode
 mise run test           # Run tests with cargo-nextest
 mise run lint           # Run clippy
 mise run lint:actions   # Lint the GitHub Actions workflows
-mise run fmt            # Format code
-mise run fmt-check      # Check formatting without rewriting files
-mise run check          # Run all checks (fmt-check + lint + test)
+mise run format         # Format code
+mise run format:check   # Check formatting without rewriting files
+mise run check          # Run all non-modifying checks
 mise run cover          # Generate lcov coverage report
-mise run cover:html     # Generate HTML coverage report
 mise run changelog      # Preview the next version and changelog
 mise run ship:validate  # Validate the gh-ship release setup (needs gh + the gh-ship extension)
 mise run man            # Collect the generated man pages and completions
 mise run setup          # Install the binary, man pages and zsh completions locally
 ```
+
+See [Contributing: Tasks](CONTRIBUTING.md#tasks) for the maintained task inventory
+and [validation guidance](CONTRIBUTING.md#before-you-push) for choosing checks.
 
 ### Commits
 
