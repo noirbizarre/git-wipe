@@ -576,7 +576,7 @@ impl Git {
     /// the typical footprint of a branch whose pull request was merged and whose
     /// remote branch was deleted, followed by `git fetch --prune`.
     ///
-    /// Existence is resolved by set-difference against `refs/remotes` rather
+    /// Existence is resolved by set-difference against all refs rather
     /// than by reading `%(upstream:track)`, so the result does not depend on
     /// git's output locale.
     pub fn branches_with_gone_upstream(&self) -> Result<Vec<String>> {
@@ -585,8 +585,10 @@ impl Git {
             "--format=%(refname:short)%00%(upstream)",
             "refs/heads",
         ])?;
-        let remotes = self.run(&["for-each-ref", "--format=%(refname)", "refs/remotes"])?;
-        Ok(parse_gone_upstreams(&heads, &remotes))
+        // A remote of "." tracks refs/heads, not refs/remotes. Compare actual
+        // ref names without assuming the namespace of an upstream.
+        let refs = self.run(&["for-each-ref", "--format=%(refname)"])?;
+        Ok(parse_gone_upstreams(&heads, &refs))
     }
 
     /// Return the committer date, in Unix seconds, of every local branch tip.
@@ -1457,6 +1459,24 @@ mod tests {
     use crate::test_helpers::{
         advance_remote, init_repo_with_local_remote, init_repo_with_worktree_config,
     };
+
+    #[test]
+    fn existing_local_upstreams_are_not_gone() -> Result<()> {
+        let (_dir, git) = crate::test_helpers::init_repo()?;
+        git.run(&["branch", "tracked"])?;
+        git.run(&["branch", "--set-upstream-to=main", "tracked"])?;
+        assert!(
+            !git.branches_with_gone_upstream()?
+                .contains(&"tracked".into())
+        );
+        git.run(&["checkout", "--detach"])?;
+        git.run(&["branch", "-D", "main"])?;
+        assert!(
+            git.branches_with_gone_upstream()?
+                .contains(&"tracked".into())
+        );
+        Ok(())
+    }
 
     #[test]
     fn unmatched_merge_resolutions_are_not_proven_merged_by_patch_ids() -> Result<()> {
