@@ -381,6 +381,11 @@ remote, or branch), and `value` (the new value for `set`, otherwise `null`).
 Configuration listing retains its inventory schema. Interactive setup requires
 a terminal and cannot run with `--json`.
 
+Fatal status errors retain the status inventory schema with empty `entries`.
+Fatal cleanup errors preserve requested settings; settings that could not be
+resolved are `null`. Configuration errors contain `version`, `status: "error"`,
+`action`, `target`, and `errors` instead of a cleanup report.
+
 ## Configuration
 
 > [!IMPORTANT]

@@ -251,7 +251,7 @@ pub enum Command {
     },
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum ConfigAction {
     /// Display current configuration
     List,

@@ -130,6 +130,88 @@ fn successful_config_mutations_emit_exactly_one_json_acknowledgement() {
 }
 
 #[test]
+fn fatal_json_responses_preserve_the_command_schema_and_explicit_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let read = |args: &[&str]| {
+        let output = Command::cargo_bin("git-wipe")
+            .unwrap()
+            .current_dir(dir.path())
+            .args(args)
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let status = read(&["status", "--json"]);
+    assert_eq!(status["status"], "error");
+    assert_eq!(status["entries"], serde_json::json!([]));
+    assert!(status.get("local").is_none());
+    let cleanup = read(&["--json", "--dry-run", "--effort", "3", "--jobs", "2"]);
+    assert_eq!(cleanup["dry_run"], true);
+    assert_eq!(cleanup["effort"], 3);
+    assert_eq!(cleanup["jobs"], 2);
+    assert!(cleanup["min_age"].is_null());
+    let config = read(&["config", "set", "worktrunk", "false", "--json"]);
+    assert_eq!(config["action"], "set");
+    assert_eq!(config["target"], "worktrunk");
+    assert!(config.get("local").is_none());
+}
+
+#[test]
+fn fatal_cleanup_reports_keep_resolved_settings_and_do_not_invent_unresolved_ones() {
+    let dir = init_repo();
+    configure(&dir);
+    for (key, value) in [
+        ("wipe.effort", "3"),
+        ("wipe.jobs", "2"),
+        ("wipe.ignore", "["),
+    ] {
+        assert!(
+            StdCommand::new("git")
+                .args(["config", key, value])
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let output = Command::cargo_bin("git-wipe")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["--json", "--dry-run", "--no-fetch", "--no-pull"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["effort"], 3);
+    assert_eq!(response["jobs"], 2);
+    assert_eq!(response["dry_run"], true);
+    assert!(
+        StdCommand::new("git")
+            .args(["config", "wipe.effort", "invalid"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = Command::cargo_bin("git-wipe")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["--json", "--dry-run"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(response["effort"].is_null());
+    assert!(response["jobs"].is_null());
+    assert_eq!(response["dry_run"], true);
+}
+
+#[test]
 fn removing_local_config_does_not_copy_or_claim_to_remove_inherited_values() {
     let dir = init_repo();
     let global = dir.path().join("global-config");

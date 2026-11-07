@@ -38,7 +38,7 @@ use git::{GitCommandError, GitErrorKind};
 use report::Report;
 
 fn main() -> ExitCode {
-    let mut cli = Cli::parse();
+    let cli = Cli::parse();
 
     // Before any `Style` or `Term` is built: `console` caches the colour
     // decision per stream on first use, so a later call would be a no-op.
@@ -60,53 +60,52 @@ fn main() -> ExitCode {
         Ok(false) => {
             let err = anyhow::anyhow!("Not a git repository (or any of the parent directories).");
             if cli.json {
-                emit_fatal_json(&err);
+                emit_fatal_json(&cli, &git, &err);
             } else {
                 ui.error(&err.to_string());
             }
             return ExitCode::FAILURE;
         }
         Err(err) => {
-            fail(&ui, cli.json, &err);
+            fail(&ui, &cli, &git, &err);
             return ExitCode::FAILURE;
         }
     }
 
     let json = cli.json;
-    // Taken out rather than matched by value: the `status` arm needs both the
-    // subcommand payload and a borrow of `cli` for the global flags.
-    let result = match cli.command.take() {
-        Some(Command::Config { action }) => handle_config_command(&git, &ui, json, action),
-        Some(Command::Status { merged }) => handle_status(&git, &ui, &cli, merged),
+    // Retain command identity so fatal responses use the invoked schema.
+    let result = match &cli.command {
+        Some(Command::Config { action }) => handle_config_command(&git, &ui, json, action.clone()),
+        Some(Command::Status { merged }) => handle_status(&git, &ui, &cli, *merged),
         None => handle_clean(&git, &ui, &cli),
     };
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) if is_cancelled(&err) => {
-            report_cancelled(&ui, json);
+            report_cancelled(&ui, &cli, &git);
             ExitCode::FAILURE
         }
         Err(err) => {
-            fail(&ui, json, &err);
+            fail(&ui, &cli, &git, &err);
             ExitCode::FAILURE
         }
     }
 }
 
 /// Render a user-cancelled run, as text or as a JSON document.
-fn report_cancelled(ui: &ui::Ui, json: bool) {
-    if json {
-        emit_fatal_json(&anyhow::anyhow!("Cancelled."));
+fn report_cancelled(ui: &ui::Ui, cli: &Cli, git: &git::Git) {
+    if cli.json {
+        emit_fatal_json(cli, git, &anyhow::anyhow!("Cancelled."));
     } else {
         ui.muted("Cancelled.");
     }
 }
 
 /// Render a fatal error, as text or as a JSON document.
-fn fail(ui: &ui::Ui, json: bool, err: &anyhow::Error) {
-    if json {
-        emit_fatal_json(err);
+fn fail(ui: &ui::Ui, cli: &Cli, git: &git::Git, err: &anyhow::Error) {
+    if cli.json {
+        emit_fatal_json(cli, git, err);
     } else {
         report_error(ui, err);
     }
@@ -116,8 +115,62 @@ fn fail(ui: &ui::Ui, json: bool, err: &anyhow::Error) {
 ///
 /// Printing the document is itself best-effort: a broken pipe here must not
 /// mask the error we are already reporting through the exit code.
-fn emit_fatal_json(err: &anyhow::Error) {
-    let _ = report::print_json(&Report::fatal("run", "repository", err));
+fn emit_fatal_json(cli: &Cli, git: &git::Git, err: &anyhow::Error) {
+    let _ = fatal_document(cli, git, err).and_then(|document| report::print_json(&document));
+}
+
+fn fatal_document(cli: &Cli, git: &git::Git, err: &anyhow::Error) -> Result<serde_json::Value> {
+    let error = report::ReportError::new("run", "repository", err);
+    match &cli.command {
+        Some(Command::Status { .. }) => {
+            let mut response = report::StatusReport::new(Vec::new(), Vec::new());
+            response.status = report::Status::Error;
+            response.errors.push(error);
+            Ok(serde_json::to_value(response)?)
+        }
+        Some(Command::Config { action }) => {
+            let mutation = config_mutation_report(action);
+            Ok(serde_json::json!({
+                "version": Report::VERSION, "status": "error",
+                "action": mutation.as_ref().map_or("list", |m| m.action),
+                "target": mutation.as_ref().map(|m| &m.target), "errors": [error]
+            }))
+        }
+        None => {
+            let mut response = serde_json::to_value(Report::fatal("run", "repository", err))?;
+            // Configuration may be unreadable or discovery may have failed.
+            // Preserve explicit flags, but never label invented defaults as
+            // effective settings when configuration could not be resolved.
+            let cfg = config::Config::try_load(git).ok().flatten();
+            response["dry_run"] = cli.dry_run.into();
+            response["effort"] = serde_json::to_value(
+                cli.effort
+                    .map(branches::Effort::try_from)
+                    .transpose()?
+                    .or_else(|| cfg.as_ref().map(|c| c.effort.unwrap_or_default())),
+            )?;
+            response["min_age"] = serde_json::to_value(
+                cli.min_age
+                    .or_else(|| cfg.as_ref().map(|c| resolve_min_age(cli, c))),
+            )?;
+            response["jobs"] =
+                serde_json::to_value(if cli.verbose || cli.jobs.is_some() || cfg.is_some() {
+                    Some(resolve_jobs(
+                        cli,
+                        cfg.as_ref().unwrap_or(&config::Config::default()),
+                    ))
+                } else {
+                    None
+                })?;
+            response["forge"] = serde_json::to_value(if cli.no_forge {
+                Some(forge::ForgeSetting::Off)
+            } else {
+                cli.forge
+                    .or_else(|| cfg.as_ref().map(|c| resolve_forge(cli, c)))
+            })?;
+            Ok(response)
+        }
+    }
 }
 
 /// Whether an error chain represents a user-cancelled prompt (Esc / Ctrl-C).
@@ -870,15 +923,26 @@ mod tests {
         let ui = ui::Ui::new();
         let err = git_err(GitErrorKind::Auth, "fatal: Authentication failed");
         // Text mode: goes through report_error on stderr.
-        fail(&ui, false, &err);
+        let git = git::Git::new(false);
+        fail(&ui, &Cli::parse_from(["git-wipe"]), &git, &err);
         // JSON mode: an error document on stdout.
-        fail(&ui::Ui::quiet(), true, &err);
+        fail(
+            &ui::Ui::quiet(),
+            &Cli::parse_from(["git-wipe", "--json"]),
+            &git,
+            &err,
+        );
     }
 
     #[test]
     fn report_cancelled_renders_text_or_json_without_panicking() {
-        report_cancelled(&ui::Ui::new(), false);
-        report_cancelled(&ui::Ui::quiet(), true);
+        let git = git::Git::new(false);
+        report_cancelled(&ui::Ui::new(), &Cli::parse_from(["git-wipe"]), &git);
+        report_cancelled(
+            &ui::Ui::quiet(),
+            &Cli::parse_from(["git-wipe", "--json"]),
+            &git,
+        );
     }
 
     #[test]
