@@ -723,10 +723,19 @@ impl Git {
     /// common merge-base (unrelated histories).
     pub fn patch_id_match(&self, target: &str, branch: &str) -> Result<bool> {
         let range = format!("{target}..{branch}");
+        // Patch IDs omit merges, including unique conflict resolutions. A
+        // filtered history cannot prove those commits' content was integrated.
+        if !self
+            .run(&["rev-list", "--merges", "-1", &range])?
+            .is_empty()
+        {
+            return Ok(false);
+        }
         let branch_ids = self.patch_ids_for_range(&range)?;
         if branch_ids.is_empty() {
-            // Branch has no commits beyond target — already merged.
-            return Ok(true);
+            // Empty patches also disappear from patch-id output; only actual
+            // ancestry establishes that there are no unmatched commits.
+            return self.run_exit_code(&["merge-base", "--is-ancestor", branch, target]);
         }
 
         // Resolve merge-base; if unrelated histories, bail out as "no match".
@@ -1395,6 +1404,52 @@ mod tests {
     use crate::test_helpers::{
         advance_remote, init_repo_with_local_remote, init_repo_with_worktree_config,
     };
+
+    #[test]
+    fn unmatched_merge_resolutions_are_not_proven_merged_by_patch_ids() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        let base = git.run(&["rev-parse", "HEAD"])?;
+        let tree = git.run(&["rev-parse", "HEAD^{tree}"])?;
+        let left = git.run(&["commit-tree", &tree, "-p", &base, "-m", "left"])?;
+        let right = git.run(&["commit-tree", &tree, "-p", &base, "-m", "right"])?;
+        let target = git.run(&[
+            "commit-tree",
+            &tree,
+            "-p",
+            &left,
+            "-p",
+            &right,
+            "-m",
+            "target",
+        ])?;
+        std::fs::write(dir.path().join("resolution.txt"), "unique resolution")?;
+        git.run(&["add", "."])?;
+        let unique_tree = git.run(&["write-tree"])?;
+        let branch = git.run(&[
+            "commit-tree",
+            &unique_tree,
+            "-p",
+            &left,
+            "-p",
+            &right,
+            "-m",
+            "resolution",
+        ])?;
+        assert!(!git.patch_id_match(&target, &branch)?);
+        assert!(!git.trees_match(&target, &branch)?);
+        assert!(!git.run_exit_code(&["merge-base", "--is-ancestor", &branch, &target])?);
+        // Matching non-merge patches must not hide the unmatched merge either.
+        let advanced = git.run(&[
+            "commit-tree",
+            &unique_tree,
+            "-p",
+            &branch,
+            "-m",
+            "empty followup",
+        ])?;
+        assert!(!git.patch_id_match(&target, &advanced)?);
+        Ok(())
+    }
 
     #[test]
     fn config_readers_propagate_failures_that_are_not_an_unset_key() -> Result<()> {
