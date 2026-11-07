@@ -652,6 +652,19 @@ impl Git {
     /// `-`. Returns `false` when the output is empty, which means the branch
     /// has no commits ahead of `upstream`.
     pub fn cherry_merged(&self, upstream: &str, branch: &str) -> Result<bool> {
+        // Like patch-id, git cherry ignores merges. Matched ordinary commits
+        // do not prove that an unmatched conflict resolution is represented.
+        if !self
+            .run(&[
+                "rev-list",
+                "--merges",
+                "-1",
+                &format!("{upstream}..{branch}"),
+            ])?
+            .is_empty()
+        {
+            return Ok(false);
+        }
         let out = self.run(&["cherry", upstream, branch])?;
         // If all lines start with `-`, every commit was cherry-picked upstream.
         Ok(!out.is_empty() && out.lines().all(|l| l.starts_with('-')))
@@ -1539,6 +1552,27 @@ mod tests {
             "empty followup",
         ])?;
         assert!(!git.patch_id_match(&target, &advanced)?);
+        // A matched ordinary patch must not let the earlier cherry strategy
+        // bypass the merge-resolution safeguard in the complete scanner.
+        std::fs::write(dir.path().join("extra.txt"), "shared patch")?;
+        git.run(&["add", "."])?;
+        let branch_tree = git.run(&["write-tree"])?;
+        let branch_tip = git.run(&["commit-tree", &branch_tree, "-p", &branch, "-m", "extra"])?;
+        git.run(&["rm", "--cached", "resolution.txt"])?;
+        let target_tree = git.run(&["write-tree"])?;
+        let target_tip = git.run(&["commit-tree", &target_tree, "-p", &target, "-m", "extra"])?;
+        assert!(!git.cherry_merged(&target_tip, &branch_tip)?);
+        git.run(&["update-ref", "refs/heads/main", &target_tip])?;
+        git.run(&["branch", "unique-resolution", &branch_tip])?;
+        let filter = crate::branches::Filter::load(&git, &crate::config::Config::default())?;
+        let found = crate::branches::find_merged_local(
+            &git,
+            &filter,
+            crate::branches::Effort::Thorough,
+            1,
+            None,
+        )?;
+        assert!(!found.candidates.contains(&"unique-resolution".into()));
         Ok(())
     }
 
