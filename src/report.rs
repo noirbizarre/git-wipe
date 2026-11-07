@@ -341,6 +341,15 @@ impl Report {
     }
 }
 
+/// Acknowledgement of a successful noninteractive configuration edit.
+#[derive(Debug, Serialize)]
+pub struct ConfigMutationReport {
+    pub status: Status,
+    pub action: &'static str,
+    pub target: String,
+    pub value: Option<String>,
+}
+
 /// Serializable view of `git wipe config list`.
 #[derive(Debug, Serialize)]
 pub struct ConfigReport {

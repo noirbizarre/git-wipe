@@ -188,7 +188,9 @@ fn handle_config_command(
     json: bool,
     action: ConfigAction,
 ) -> Result<()> {
-    match action {
+    // Capture response metadata before dispatch consumes the argument strings.
+    let response = config_mutation_report(&action);
+    let result: Result<()> = match action {
         ConfigAction::List => {
             if json {
                 return list_config_json(git);
@@ -424,7 +426,40 @@ fn handle_config_command(
             config::Config::interactive_setup(git, ui)?;
             Ok(())
         }
+    };
+    result?;
+    if json && let Some(response) = response {
+        report::print_json(&response)?;
     }
+    Ok(())
+}
+
+fn config_mutation_report(action: &ConfigAction) -> Option<report::ConfigMutationReport> {
+    let (name, target, value) = match action {
+        ConfigAction::List => return None,
+        ConfigAction::Set { key, value } => ("set", key.as_str(), Some(value.clone())),
+        ConfigAction::AddProtected { pattern } => ("add-protected", pattern.as_str(), None),
+        ConfigAction::RemoveProtected { pattern } => ("remove-protected", pattern.as_str(), None),
+        ConfigAction::AddIgnore { pattern } => ("add-ignore", pattern.as_str(), None),
+        ConfigAction::RemoveIgnore { pattern } => ("remove-ignore", pattern.as_str(), None),
+        ConfigAction::AddRemote { name } => ("add-remote", name.as_str(), None),
+        ConfigAction::RemoveRemote { name } => ("remove-remote", name.as_str(), None),
+        ConfigAction::AddForgeRepo { repository } => ("add-forge-repo", repository.as_str(), None),
+        ConfigAction::RemoveForgeRepo { repository } => {
+            ("remove-forge-repo", repository.as_str(), None)
+        }
+        ConfigAction::Protect { branch } => ("protect", branch.as_str(), None),
+        ConfigAction::Unprotect { branch } => ("unprotect", branch.as_str(), None),
+        ConfigAction::Ignore { branch } => ("ignore", branch.as_str(), None),
+        ConfigAction::Unignore { branch } => ("unignore", branch.as_str(), None),
+        ConfigAction::Setup => ("setup", "wipe", None),
+    };
+    Some(report::ConfigMutationReport {
+        status: report::Status::Success,
+        action: name,
+        target: target.into(),
+        value,
+    })
 }
 
 /// `config list --json`: the same data as the text listing, structured.

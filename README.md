@@ -375,6 +375,12 @@ Each of these has a counterpart: `add-`/`remove-` pairs for the `protected`,
 for individual branches. `git wipe config -h` lists them all, and each has its
 own man page (`man git-wipe-config-set`).
 
+With `--json`, successful configuration edits emit one acknowledgement with
+`status: "success"`, `action` (the subcommand), `target` (the key, pattern,
+remote, or branch), and `value` (the new value for `set`, otherwise `null`).
+Configuration listing retains its inventory schema. Interactive setup requires
+a terminal and cannot run with `--json`.
+
 ## Configuration
 
 > [!IMPORTANT]

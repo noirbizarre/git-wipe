@@ -94,6 +94,42 @@ fn version_flag_shows_version() {
 // ── Config subcommands ───────────────────────────────────────────────
 
 #[test]
+fn successful_config_mutations_emit_exactly_one_json_acknowledgement() {
+    let dir = init_repo();
+    for args in [
+        vec!["set", "worktrunk", "false"],
+        vec!["add-protected", "release/*"],
+        vec!["remove-protected", "release/*"],
+        vec!["add-ignore", "wip/*"],
+        vec!["remove-ignore", "wip/*"],
+        vec!["add-remote", "origin"],
+        vec!["remove-remote", "origin"],
+        vec!["add-forge-repo", "origin"],
+        vec!["remove-forge-repo", "origin"],
+        vec!["protect", "feature"],
+        vec!["unprotect", "feature"],
+        vec!["ignore", "feature"],
+        vec!["unignore", "feature"],
+    ] {
+        let output = Command::cargo_bin("git-wipe")
+            .unwrap()
+            .current_dir(dir.path())
+            .arg("config")
+            .args(&args)
+            .arg("--json")
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["status"], "success");
+        assert_eq!(value["action"], args[0]);
+        assert_eq!(value["target"], args[1]);
+        assert!(output.stderr.is_empty());
+    }
+}
+
+#[test]
 fn removing_local_config_does_not_copy_or_claim_to_remove_inherited_values() {
     let dir = init_repo();
     let global = dir.path().join("global-config");
