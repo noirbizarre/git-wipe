@@ -11,6 +11,71 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 > There is no automatic configuration migration — see the README for how to
 > move an existing `[sync]` section across.
 
+## [0.7.0](https://github.com/noirbizarre/git-wipe/compare/0.6.0..0.7.0) - 2026-11-07
+
+### 💫 Features
+
+- **forge** Treat closed requests as cleanup candidates ([#113](https://github.com/noirbizarre/git-wipe/issues/113)) - ([8339f02](https://github.com/noirbizarre/git-wipe/commit/8339f0276303b2478900407e0980df0249e5fecd))
+
+### 🐛 Bug Fixes
+
+- **forge** Detect merged requests in upstream repositories ([#108](https://github.com/noirbizarre/git-wipe/issues/108)) - ([fed8564](https://github.com/noirbizarre/git-wipe/commit/fed8564b8fade806646619ab356a38432722cd43))
+- **packaging** Make the AUR source package build ([#104](https://github.com/noirbizarre/git-wipe/issues/104)) - ([5c7a466](https://github.com/noirbizarre/git-wipe/commit/5c7a4664941430d966cf7aaabc46c0754180d3a1))
+- **release** Exclude staged assets from crate packages - ([68a6179](https://github.com/noirbizarre/git-wipe/commit/68a617911945da5516e9e6f6cb92910c95e8f86a))
+- Align cleanup safety and reporting contracts ([#114](https://github.com/noirbizarre/git-wipe/issues/114)) - ([32e2c1c](https://github.com/noirbizarre/git-wipe/commit/32e2c1c7eedc22b23586bf2daf9c1bbda2ec66d2))
+- Parse Windows process probes without locale assumptions - ([8624119](https://github.com/noirbizarre/git-wipe/commit/8624119b64b507e9003c8734fe17cfe6c3b7838a))
+- Protect merge resolutions across patch-based strategies - ([7e1189f](https://github.com/noirbizarre/git-wipe/commit/7e1189faa62a5e5ce050e9a0d7f4d0e634f292e1))
+- Preserve command context in fatal JSON reports - ([5353c18](https://github.com/noirbizarre/git-wipe/commit/5353c18cec1514e682829ebff48dd90a2b8213f8))
+- Emit JSON responses for configuration mutations - ([e0ef6e4](https://github.com/noirbizarre/git-wipe/commit/e0ef6e408265e2d40e5284b7b8701d053a84b759))
+- Preserve configuration scopes when removing values - ([13d72fd](https://github.com/noirbizarre/git-wipe/commit/13d72fda3a2555710ebc83ff39c61fd5dae436ac))
+- Report merged and gone status independently - ([53047a9](https://github.com/noirbizarre/git-wipe/commit/53047a96fb5e56467df41111035e3c61f05e26b8))
+- Honor per-branch ignores during fetch - ([65bb255](https://github.com/noirbizarre/git-wipe/commit/65bb255b56bcdae8e5e606acb4817180b97a35de))
+- Scope gone cleanup to refreshed upstream remotes - ([17f338b](https://github.com/noirbizarre/git-wipe/commit/17f338b878ebae7fed73a296e4406f972c75b627))
+- Recognize existing local upstream references - ([9be2b80](https://github.com/noirbizarre/git-wipe/commit/9be2b80b38a9f02eec4a5e6163295b9af15af524))
+- Preserve worktree locks when process checks are uncertain - ([f409167](https://github.com/noirbizarre/git-wipe/commit/f4091675003473000fa2c35a9cdc859c7cef8d3b))
+- Preserve raw worktree filenames in age checks - ([0d41c4a](https://github.com/noirbizarre/git-wipe/commit/0d41c4a22170906603d27b1d09feebb1285b65c6))
+- Isolate metadata writes during repository analysis - ([31f21e9](https://github.com/noirbizarre/git-wipe/commit/31f21e9909f48ae3cc31e79b1503679ca27ae613))
+- Keep dry-run setup configuration in memory - ([7f0b07a](https://github.com/noirbizarre/git-wipe/commit/7f0b07a6393f1044fe49c04d34b51d49b07b69fe))
+- Restrict stale lock recovery to selected worktrees - ([02b2801](https://github.com/noirbizarre/git-wipe/commit/02b2801ebde10a913ecd01a5e704d7d28b341fbc))
+- Preserve unmatched merge resolution changes - ([ff22b52](https://github.com/noirbizarre/git-wipe/commit/ff22b52cfe9a7fb6c95d899ab2c24370ee4390de))
+- Protect dirty orphan worktrees from unattended removal - ([55ded6f](https://github.com/noirbizarre/git-wipe/commit/55ded6f327f2da4f0ee5cb9f8e6c68493d59f707))
+
+### 📚 Documentation
+
+- **readme** Fix Mermaid flowchart rendering on GitHub ([#107](https://github.com/noirbizarre/git-wipe/issues/107)) - ([e000079](https://github.com/noirbizarre/git-wipe/commit/e0000792d49a0a030ffb9c6e1e5041182e0084c2))
+- Clarify current branch forge query scope - ([8830455](https://github.com/noirbizarre/git-wipe/commit/883045571488fbb6fb83093cdcbc9e6d387833d6))
+- Clarify the force removal example - ([47da2bc](https://github.com/noirbizarre/git-wipe/commit/47da2bc90cb12a110cdd1003022fee666e32436f))
+- Clarify optional VCS tag prefix handling - ([49b9156](https://github.com/noirbizarre/git-wipe/commit/49b9156ab38bdc0758c7dd36ea2dc854983db439))
+- Correct packaging release trigger guidance - ([4a1c124](https://github.com/noirbizarre/git-wipe/commit/4a1c12412a071bc2156f340898ef09bc6bf0fba7))
+- Describe current engine module ownership - ([7dd5e4a](https://github.com/noirbizarre/git-wipe/commit/7dd5e4a7adee20e57ebf4e16539d5f9d52083da0))
+- Align hook guidance with configured checks - ([2917557](https://github.com/noirbizarre/git-wipe/commit/2917557938614db0ceee0ed653e93b8ce45543cf))
+- Correct development task commands - ([00198a7](https://github.com/noirbizarre/git-wipe/commit/00198a7e587f9f3605595880bbd9f1d7d484bd62))
+- Clarify force deletion candidate guarantees - ([4f9d78d](https://github.com/noirbizarre/git-wipe/commit/4f9d78d1e7bb2f2d03b7b490645a75bde95f9f4f))
+
+### 🧪 Tests
+
+- Compare canonical worktree paths on Windows - ([10e49f6](https://github.com/noirbizarre/git-wipe/commit/10e49f69b104be65e1b6b9674a2a692bfd13d03b))
+- Respect macOS filesystem paths and filename constraints - ([4f68512](https://github.com/noirbizarre/git-wipe/commit/4f685127ce8b2f7813f7dd9e6fdf762600e01477))
+- Keep filename regression portable to Windows - ([9c64abd](https://github.com/noirbizarre/git-wipe/commit/9c64abd7fff275a09ee469fabacd24ae6a99aea6))
+
+### 🏗️ Build
+
+- **deps** Bump ureq from 3.5.0 to 3.5.1 in the rust-dependencies group ([#115](https://github.com/noirbizarre/git-wipe/issues/115)) - ([1ed7ce8](https://github.com/noirbizarre/git-wipe/commit/1ed7ce80d09984259ffa5f7050eb2fce08dce32b))
+- **deps** Update mise.lock - ([3e6bb96](https://github.com/noirbizarre/git-wipe/commit/3e6bb9605e4d838c2a8a6b31442e377198040419))
+- **deps** Bump globset from 0.4.20 to 0.4.21 in the rust-dependencies group ([#111](https://github.com/noirbizarre/git-wipe/issues/111)) - ([4ed8ac0](https://github.com/noirbizarre/git-wipe/commit/4ed8ac024fb9a2b507e93bd44f3ea1c1ec642349))
+- **deps** Bump the rust-dependencies group across 1 directory with 2 updates ([#109](https://github.com/noirbizarre/git-wipe/issues/109)) - ([c73e57c](https://github.com/noirbizarre/git-wipe/commit/c73e57c22721df97caa3586b82917dbe2cf53b53))
+
+### 🧹 Chores
+
+- **template** Merge latest rust.tpl updates - ([244b5b4](https://github.com/noirbizarre/git-wipe/commit/244b5b4cdb9834f38d892daeb38ca852b8a9cd37))
+- **template** Record release authentication mode - ([5811688](https://github.com/noirbizarre/git-wipe/commit/5811688e89eb16ecbd6b7abcb6da7f97dc49d95b))
+- **template** Merge latest rust.tpl updates - ([2fb89a7](https://github.com/noirbizarre/git-wipe/commit/2fb89a744228aaf35802331f3fad515126e295af))
+
+### Tpl
+
+- Render rust at main - ([3da371d](https://github.com/noirbizarre/git-wipe/commit/3da371d16919bf146ed1476c4b08f3772107d76d))
+- Render rust at main - ([6550951](https://github.com/noirbizarre/git-wipe/commit/655095188a013cabaf0c11ef8c262ce29758f086))
+
 ## [0.6.0](https://github.com/noirbizarre/git-wipe/compare/0.5.0..0.6.0) - 2026-10-22
 
 ### 💫 Features
@@ -196,6 +261,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### 📚 Documentation
 
+- **changelog** Exclude ci, test, style and merge commits ([#10](https://github.com/noirbizarre/git-wipe/issues/10)) - ([12d7c86](https://github.com/noirbizarre/git-wipe/commit/12d7c86329d4801f161a14f6d9e1b61145e51740))
 - **readme** Correct merge-detection diagram, refspec and worktrunk notes - ([dda94db](https://github.com/noirbizarre/git-wipe/commit/dda94dbaa68bedb2a07b44910d57534975ed869a))
 - **readme** Describe the dirty-worktree confirmation pass - ([95b3d93](https://github.com/noirbizarre/git-wipe/commit/95b3d930a7b306eed4b9fedc1888caf299897713))
 - **readme** Document prek hook installation in the dev workflow - ([ed15f09](https://github.com/noirbizarre/git-wipe/commit/ed15f09fe80bbc33dd6a942853f06a03a0d8a0ba))
@@ -229,8 +295,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **codecov** Get Codecov under control ([#33](https://github.com/noirbizarre/git-wipe/issues/33)) - ([17e6e57](https://github.com/noirbizarre/git-wipe/commit/17e6e576f7d9f395780acbbbad907eeb84c691b4))
 - **mise** Remove the debug path prefix ([#45](https://github.com/noirbizarre/git-wipe/issues/45)) - ([5cc6bff](https://github.com/noirbizarre/git-wipe/commit/5cc6bff6183848fede3ab3849f81078de4a1c9b5))
 - **release** Fix release commit rule ([#19](https://github.com/noirbizarre/git-wipe/issues/19)) - ([67421dd](https://github.com/noirbizarre/git-wipe/commit/67421dda2904c95f204d84b2fa265879e9219fce))
+- **release** Enable release for first trial - ([bfd5f1c](https://github.com/noirbizarre/git-wipe/commit/bfd5f1c62efcab3882cd7e3d6b7423b5a02123e2))
 - Release with gh-ship and git-cliff instead of release-plz ([#50](https://github.com/noirbizarre/git-wipe/issues/50)) - ([8e73537](https://github.com/noirbizarre/git-wipe/commit/8e73537f47f7b4add45a08c1c677c530079ac5e4))
 - Force the worktrunk install so coverage stays deterministic - ([f9722bd](https://github.com/noirbizarre/git-wipe/commit/f9722bd7babc331eadb43c86f65e72b5a20de52a))
+- Rewrite release-binaries workflow based on release-plz model ([#12](https://github.com/noirbizarre/git-wipe/issues/12)) - ([366fac8](https://github.com/noirbizarre/git-wipe/commit/366fac8289a9b91a5626cc75ecd2c9c71f77ee29))
+- Replace check job with lint using prek-action v2 ([#8](https://github.com/noirbizarre/git-wipe/issues/8)) - ([28d5f1b](https://github.com/noirbizarre/git-wipe/commit/28d5f1bac7e3a6b80079a8f16a13eaa1e42914ec))
+- Merge coverage into test job ([#6](https://github.com/noirbizarre/git-wipe/issues/6)) - ([115505b](https://github.com/noirbizarre/git-wipe/commit/115505bbee21cc49078fd11fcba0b081642a318b))
 
 ### 🧹 Chores
 
@@ -238,16 +308,8 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.1.1](https://github.com/noirbizarre/git-wipe/compare/0.1.0..0.1.1) - 2026-04-09
 
-### 📚 Documentation
-
-- **changelog** Exclude ci, test, style and merge commits ([#10](https://github.com/noirbizarre/git-wipe/issues/10)) - ([12d7c86](https://github.com/noirbizarre/git-wipe/commit/12d7c86329d4801f161a14f6d9e1b61145e51740))
-
 ### 🔧 CI
 
-- **release** Enable release for first trial - ([bfd5f1c](https://github.com/noirbizarre/git-wipe/commit/bfd5f1c62efcab3882cd7e3d6b7423b5a02123e2))
-- Rewrite release-binaries workflow based on release-plz model ([#12](https://github.com/noirbizarre/git-wipe/issues/12)) - ([366fac8](https://github.com/noirbizarre/git-wipe/commit/366fac8289a9b91a5626cc75ecd2c9c71f77ee29))
-- Replace check job with lint using prek-action v2 ([#8](https://github.com/noirbizarre/git-wipe/issues/8)) - ([28d5f1b](https://github.com/noirbizarre/git-wipe/commit/28d5f1bac7e3a6b80079a8f16a13eaa1e42914ec))
-- Merge coverage into test job ([#6](https://github.com/noirbizarre/git-wipe/issues/6)) - ([115505b](https://github.com/noirbizarre/git-wipe/commit/115505bbee21cc49078fd11fcba0b081642a318b))
 - Release and CI improvements - ([c41c73d](https://github.com/noirbizarre/git-wipe/commit/c41c73d2f970c00fd8f79ea327300c3911634d33))
 
 ## 0.1.0 - 2026-04-08
