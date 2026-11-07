@@ -3675,6 +3675,8 @@ mod tests {
             let (_dir, git, wt_path) = crate::test_helpers::init_repo_with_stale_locked_worktree()?;
             // Git canonicalizes linked-worktree paths; macOS temporary roots
             // can use /var while Git reports the /private/var destination.
+            // Canonicalize both sides since Windows adds a verbatim prefix
+            // that Git's listing omits even when both identify the same path.
             let expected_path = std::fs::canonicalize(&wt_path)?;
             let mut config = default_config();
             let mut opts = opts_yes_skip_network();
@@ -3690,7 +3692,7 @@ mod tests {
             let wt = git
                 .worktree_list()?
                 .into_iter()
-                .find(|wt| wt.path == expected_path)
+                .find(|wt| std::fs::canonicalize(&wt.path).is_ok_and(|path| path == expected_path))
                 .expect("worktree survives");
             assert!(wt.is_locked, "scope {scope} must not authorize unlocking");
         }
