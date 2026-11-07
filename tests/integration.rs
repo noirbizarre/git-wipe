@@ -17,6 +17,61 @@ use common::{
 // ── CLI basics ───────────────────────────────────────────────────────
 
 #[test]
+fn dirty_orphan_worktrees_require_force_in_unattended_runs() {
+    for json in [false, true] {
+        for staged in [false, true] {
+            let dir = init_repo();
+            configure(&dir);
+            let wt = add_merged_worktree(&dir, "orphan", "orphan-tree");
+            let file = if staged { "README.md" } else { "untracked.txt" };
+            std::fs::write(wt.join(file), "valuable uncommitted work").unwrap();
+            if staged {
+                assert!(
+                    StdCommand::new("git")
+                        .args(["add", file])
+                        .current_dir(&wt)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            assert!(
+                StdCommand::new("git")
+                    .args(["update-ref", "-d", "refs/heads/orphan"])
+                    .current_dir(dir.path())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            for force in [false, true] {
+                let mut cmd = Command::cargo_bin("git-wipe").unwrap();
+                cmd.current_dir(dir.path()).args([
+                    "--yes",
+                    "--no-fetch",
+                    "--no-pull",
+                    "--local-only",
+                    "--no-worktrunk",
+                ]);
+                if json {
+                    cmd.arg("--json");
+                }
+                if force {
+                    cmd.arg("--force");
+                }
+                cmd.assert().success();
+                assert_eq!(wt.exists(), !force);
+                if !force {
+                    assert_eq!(
+                        std::fs::read_to_string(wt.join(file)).unwrap(),
+                        "valuable uncommitted work"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn help_flag_shows_usage() {
     Command::cargo_bin("git-wipe")
         .unwrap()

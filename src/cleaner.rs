@@ -692,8 +692,8 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             // check whether the worktree is dirty (untracked / uncommitted
             // changes) or whether the branch has commits not contained in any
             // merge target (relevant for `wt remove`, which refuses unmerged
-            // branches without `--force-delete`). Orphan worktrees keep the
-            // existing auto-force behavior and are not surfaced here.
+            // branches without `--force-delete`). Orphans receive the same
+            // explicit authorization below, using their path as identity.
             let targets_for_unmerged = if opts.use_worktrunk {
                 match resolve_merge_targets(git, &filter) {
                     Ok(targets) => targets,
@@ -970,6 +970,46 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     if !selected.contains(&key) {
                         continue;
                     }
+                    // A missing branch ref says nothing about uncommitted
+                    // files. Failed inspection must never authorize removal.
+                    let dirty = match git.orphan_worktree_dirty(&wt.path) {
+                        Ok(dirty) => dirty,
+                        Err(err) => {
+                            warn(
+                                ui,
+                                &mut report,
+                                &format!(
+                                    "Could not check orphan '{}': {err}; explicit force is required.",
+                                    tilde_path(&wt.path)
+                                ),
+                            );
+                            true
+                        }
+                    };
+                    let force = if dirty && !opts.yes {
+                        !ui.multi_select(
+                            "Select orphan worktrees to force-remove (unselected will be skipped)",
+                            std::slice::from_ref(&key),
+                            &[tilde_path(&wt.path)],
+                            &[opts.force],
+                            &["dirty or status unknown".to_string()],
+                            true,
+                        )?
+                        .is_empty()
+                    } else {
+                        opts.force
+                    };
+                    if dirty && !force {
+                        report.local.worktrees.push(WorktreeEntry {
+                            path: path_string(&wt.path),
+                            branch: wt.branch.clone(),
+                            kind: WorktreeKind::Orphan,
+                            status: ItemStatus::Skipped,
+                            size_kb: sizes.get(&wt.path).map(|&b| b / 1024),
+                            stale_lock: stale_locks.get(&wt.path).cloned(),
+                        });
+                        continue;
+                    }
                     if opts.dry_run {
                         ui.dry_run(&format!(
                             "Would remove worktree '{}'.",
@@ -986,6 +1026,9 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     } else {
                         let result = ui.spinner(
                             &format!("Removing worktree {}…", tilde_path(&wt.path)),
+                            // Git sees a missing HEAD as dirty even when the
+                            // reflog comparison above proved the files clean.
+                            // Authorization has already been enforced here.
                             || remove_worktree(git, wt, opts.use_worktrunk, true, false),
                         );
                         let status = match result {

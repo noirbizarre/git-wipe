@@ -932,6 +932,33 @@ impl Git {
         Ok(!out.trim().is_empty())
     }
 
+    /// An orphan has no resolvable HEAD; its reflog retains the last checkout
+    /// commit, which also lets us protect staged changes rather than comparing
+    /// only the index to the working tree. Missing history is an error so the
+    /// caller requires explicit force authorization instead of assuming clean.
+    pub fn orphan_worktree_dirty(&self, path: &Path) -> Result<bool> {
+        let git = self.in_dir(path);
+        // HEAD@{0} follows the deleted branch's reflog, not the linked
+        // worktree's HEAD log. Read the latter's final new object explicitly.
+        let log = git.run(&[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "logs/HEAD",
+        ])?;
+        let history = std::fs::read_to_string(log).context("Cannot read orphan HEAD history")?;
+        let tip = history
+            .lines()
+            .last()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .context("Orphan HEAD history is empty; use --force only after inspecting its files")?;
+        let unchanged = git.run_exit_code(&["diff", "--quiet", tip, "--"])?;
+        // Staged content may differ even if the worktree was restored to tip.
+        let index_unchanged = git.run_exit_code(&["diff", "--cached", "--quiet", tip, "--"])?;
+        let untracked = git.run(&["ls-files", "--others", "--exclude-standard", "-z"])?;
+        Ok(!unchanged || !index_unchanged || !untracked.is_empty())
+    }
+
     /// List every tracked and untracked-but-not-ignored file inside `path`.
     ///
     /// Runs `git ls-files --cached --others --exclude-standard` from `path`.
