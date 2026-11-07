@@ -3673,6 +3673,9 @@ mod tests {
     fn out_of_scope_worktrees_keep_their_stale_locks() -> Result<()> {
         for scope in ["disabled", "ignored", "protected", "young", "dirty"] {
             let (_dir, git, wt_path) = crate::test_helpers::init_repo_with_stale_locked_worktree()?;
+            // Git canonicalizes linked-worktree paths; macOS temporary roots
+            // can use /var while Git reports the /private/var destination.
+            let expected_path = std::fs::canonicalize(&wt_path)?;
             let mut config = default_config();
             let mut opts = opts_yes_skip_network();
             match scope {
@@ -3687,7 +3690,7 @@ mod tests {
             let wt = git
                 .worktree_list()?
                 .into_iter()
-                .find(|wt| wt.path == Path::new(&wt_path))
+                .find(|wt| wt.path == expected_path)
                 .expect("worktree survives");
             assert!(wt.is_locked, "scope {scope} must not authorize unlocking");
         }

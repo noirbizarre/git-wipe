@@ -1619,12 +1619,17 @@ mod tests {
         let names = vec![PathBuf::from("é file.txt"), PathBuf::from(" space .txt")];
         #[cfg(unix)]
         let names = {
-            use std::os::unix::ffi::OsStringExt;
             let mut names = names;
             names.push(PathBuf::from("quote\"tab\tnewline\n.txt"));
-            names.push(PathBuf::from(std::ffi::OsString::from_vec(
-                b"nonutf8\xff".to_vec(),
-            )));
+            // APFS requires valid Unicode names; byte-oriented filesystems
+            // still need explicit coverage for paths that cannot be UTF-8.
+            #[cfg(not(target_os = "macos"))]
+            {
+                use std::os::unix::ffi::OsStringExt;
+                names.push(PathBuf::from(std::ffi::OsString::from_vec(
+                    b"nonutf8\xff".to_vec(),
+                )));
+            }
             names
         };
         for name in &names {
