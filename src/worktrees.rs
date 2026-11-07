@@ -184,6 +184,28 @@ mod tests {
     use std::process::Command;
 
     #[test]
+    fn recently_changed_quoted_files_keep_an_old_commit_worktree_young() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        // Leave no ordinary file whose mtime could mask a lost quoted path.
+        for entry in fs::read_dir(dir.path())? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                fs::remove_file(entry.path())?;
+            }
+        }
+        let status = Command::new("git")
+            .args(["commit", "--allow-empty", "--amend", "--no-edit"])
+            .env("GIT_COMMITTER_DATE", "2000-01-01T00:00:00Z")
+            .current_dir(dir.path())
+            .status()?;
+        assert!(status.success());
+        fs::write(dir.path().join("é recent file"), "new content")?;
+        let wt = git.worktree_list()?.remove(0);
+        assert!(is_too_young(&git, &wt, "1d".parse()?));
+        Ok(())
+    }
+
+    #[test]
     fn find_branch_worktrees_matches_linked_worktrees() -> Result<()> {
         let (_dir, git, _wt_path) = crate::test_helpers::init_repo_with_worktree()?;
 

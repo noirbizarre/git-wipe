@@ -1000,19 +1000,41 @@ impl Git {
 
     /// List every tracked and untracked-but-not-ignored file inside `path`.
     ///
-    /// Runs `git ls-files --cached --others --exclude-standard` from `path`.
+    /// Runs `git ls-files -z --cached --others --exclude-standard` from `path`.
     /// Gitignored files (build output, caches, dependency directories) are
     /// excluded, so scanning these for the newest mtime cannot be fooled by a
     /// build or a dependency install.
-    pub fn worktree_files(&self, path: &Path) -> Result<Vec<String>> {
-        let out =
-            self.in_dir(path)
-                .run(&["ls-files", "--cached", "--others", "--exclude-standard"])?;
-        Ok(out
-            .lines()
-            .filter(|l| !l.is_empty())
-            .map(String::from)
-            .collect())
+    pub fn worktree_files(&self, path: &Path) -> Result<Vec<PathBuf>> {
+        let args = [
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ];
+        let out = self.in_dir(path).spawn(&args)?;
+        if !out.status.success() {
+            return Err(command_error("git", &args, &out).into());
+        }
+        // Line-oriented output is display-quoted by Git, not a filesystem path.
+        // Unix paths need their original bytes, including non-UTF-8 filenames.
+        out.stdout
+            .split(|b| *b == 0)
+            .filter(|name| !name.is_empty())
+            .map(|name| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStringExt;
+                    Ok(PathBuf::from(std::ffi::OsString::from_vec(name.to_vec())))
+                }
+                #[cfg(not(unix))]
+                {
+                    Ok(PathBuf::from(
+                        std::str::from_utf8(name).context("Cannot decode worktree filename")?,
+                    ))
+                }
+            })
+            .collect()
     }
 
     /// Return the committer date, in Unix seconds, of `rev` as seen from `path`.
@@ -1516,6 +1538,28 @@ mod tests {
         ])?;
         assert!(!git.in_dir(&linked).merge_adds_nothing("main", "feature")?);
         assert_eq!(git.run(&["count-objects", "-v"])?, before_objects);
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_filenames_preserve_bytes_and_display_special_characters() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        let mut names = vec![PathBuf::from("é file.txt"), PathBuf::from(" space .txt")];
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            names.push(PathBuf::from("quote\"tab\tnewline\n.txt"));
+            names.push(PathBuf::from(std::ffi::OsString::from_vec(
+                b"nonutf8\xff".to_vec(),
+            )));
+        }
+        for name in &names {
+            std::fs::write(dir.path().join(name), "recent content")?;
+        }
+        let files = git.worktree_files(dir.path())?;
+        for name in names {
+            assert!(files.contains(&name), "missing {name:?}");
+        }
         Ok(())
     }
 
