@@ -17,6 +17,61 @@ use common::{
 // ── CLI basics ───────────────────────────────────────────────────────
 
 #[test]
+fn dirty_orphan_worktrees_require_force_in_unattended_runs() {
+    for json in [false, true] {
+        for staged in [false, true] {
+            let dir = init_repo();
+            configure(&dir);
+            let wt = add_merged_worktree(&dir, "orphan", "orphan-tree");
+            let file = if staged { "README.md" } else { "untracked.txt" };
+            std::fs::write(wt.join(file), "valuable uncommitted work").unwrap();
+            if staged {
+                assert!(
+                    StdCommand::new("git")
+                        .args(["add", file])
+                        .current_dir(&wt)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            assert!(
+                StdCommand::new("git")
+                    .args(["update-ref", "-d", "refs/heads/orphan"])
+                    .current_dir(dir.path())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            for force in [false, true] {
+                let mut cmd = Command::cargo_bin("git-wipe").unwrap();
+                cmd.current_dir(dir.path()).args([
+                    "--yes",
+                    "--no-fetch",
+                    "--no-pull",
+                    "--local-only",
+                    "--no-worktrunk",
+                ]);
+                if json {
+                    cmd.arg("--json");
+                }
+                if force {
+                    cmd.arg("--force");
+                }
+                cmd.assert().success();
+                assert_eq!(wt.exists(), !force);
+                if !force {
+                    assert_eq!(
+                        std::fs::read_to_string(wt.join(file)).unwrap(),
+                        "valuable uncommitted work"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn help_flag_shows_usage() {
     Command::cargo_bin("git-wipe")
         .unwrap()
@@ -37,6 +92,163 @@ fn version_flag_shows_version() {
 }
 
 // ── Config subcommands ───────────────────────────────────────────────
+
+#[test]
+fn successful_config_mutations_emit_exactly_one_json_acknowledgement() {
+    let dir = init_repo();
+    for args in [
+        vec!["set", "worktrunk", "false"],
+        vec!["add-protected", "release/*"],
+        vec!["remove-protected", "release/*"],
+        vec!["add-ignore", "wip/*"],
+        vec!["remove-ignore", "wip/*"],
+        vec!["add-remote", "origin"],
+        vec!["remove-remote", "origin"],
+        vec!["add-forge-repo", "origin"],
+        vec!["remove-forge-repo", "origin"],
+        vec!["protect", "feature"],
+        vec!["unprotect", "feature"],
+        vec!["ignore", "feature"],
+        vec!["unignore", "feature"],
+    ] {
+        let output = Command::cargo_bin("git-wipe")
+            .unwrap()
+            .current_dir(dir.path())
+            .arg("config")
+            .args(&args)
+            .arg("--json")
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["status"], "success");
+        assert_eq!(value["action"], args[0]);
+        assert_eq!(value["target"], args[1]);
+        assert!(output.stderr.is_empty());
+    }
+}
+
+#[test]
+fn fatal_json_responses_preserve_the_command_schema_and_explicit_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let read = |args: &[&str]| {
+        let output = Command::cargo_bin("git-wipe")
+            .unwrap()
+            .current_dir(dir.path())
+            .args(args)
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(output.stderr.is_empty());
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let status = read(&["status", "--json"]);
+    assert_eq!(status["status"], "error");
+    assert_eq!(status["entries"], serde_json::json!([]));
+    assert!(status.get("local").is_none());
+    let cleanup = read(&["--json", "--dry-run", "--effort", "3", "--jobs", "2"]);
+    assert_eq!(cleanup["dry_run"], true);
+    assert_eq!(cleanup["effort"], 3);
+    assert_eq!(cleanup["jobs"], 2);
+    assert!(cleanup["min_age"].is_null());
+    let config = read(&["config", "set", "worktrunk", "false", "--json"]);
+    assert_eq!(config["action"], "set");
+    assert_eq!(config["target"], "worktrunk");
+    assert!(config.get("local").is_none());
+}
+
+#[test]
+fn fatal_cleanup_reports_keep_resolved_settings_and_do_not_invent_unresolved_ones() {
+    let dir = init_repo();
+    configure(&dir);
+    for (key, value) in [
+        ("wipe.effort", "3"),
+        ("wipe.jobs", "2"),
+        ("wipe.ignore", "["),
+    ] {
+        assert!(
+            StdCommand::new("git")
+                .args(["config", key, value])
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let output = Command::cargo_bin("git-wipe")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["--json", "--dry-run", "--no-fetch", "--no-pull"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(response["effort"], 3);
+    assert_eq!(response["jobs"], 2);
+    assert_eq!(response["dry_run"], true);
+    assert!(
+        StdCommand::new("git")
+            .args(["config", "wipe.effort", "invalid"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = Command::cargo_bin("git-wipe")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["--json", "--dry-run"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(response["effort"].is_null());
+    assert!(response["jobs"].is_null());
+    assert_eq!(response["dry_run"], true);
+}
+
+#[test]
+fn removing_local_config_does_not_copy_or_claim_to_remove_inherited_values() {
+    let dir = init_repo();
+    let global = dir.path().join("global-config");
+    std::fs::write(&global, "[wipe]\nprotected = main\n").unwrap();
+    assert!(
+        StdCommand::new("git")
+            .args(["config", "--local", "--add", "wipe.protected", "release/*"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut cmd = Command::cargo_bin("git-wipe").unwrap();
+    cmd.current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["config", "remove-protected", "release/*"])
+        .assert()
+        .success();
+    let local = StdCommand::new("git")
+        .args(["config", "--local", "--get-all", "wipe.protected"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        local.stdout.is_empty(),
+        "inherited main must not become local"
+    );
+    let mut cmd = Command::cargo_bin("git-wipe").unwrap();
+    cmd.current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args(["config", "remove-protected", "main"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("inherited"));
+}
 
 #[test]
 fn config_list_no_config() {

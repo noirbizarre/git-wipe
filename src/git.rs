@@ -576,7 +576,7 @@ impl Git {
     /// the typical footprint of a branch whose pull request was merged and whose
     /// remote branch was deleted, followed by `git fetch --prune`.
     ///
-    /// Existence is resolved by set-difference against `refs/remotes` rather
+    /// Existence is resolved by set-difference against all refs rather
     /// than by reading `%(upstream:track)`, so the result does not depend on
     /// git's output locale.
     pub fn branches_with_gone_upstream(&self) -> Result<Vec<String>> {
@@ -585,8 +585,10 @@ impl Git {
             "--format=%(refname:short)%00%(upstream)",
             "refs/heads",
         ])?;
-        let remotes = self.run(&["for-each-ref", "--format=%(refname)", "refs/remotes"])?;
-        Ok(parse_gone_upstreams(&heads, &remotes))
+        // A remote of "." tracks refs/heads, not refs/remotes. Compare actual
+        // ref names without assuming the namespace of an upstream.
+        let refs = self.run(&["for-each-ref", "--format=%(refname)"])?;
+        Ok(parse_gone_upstreams(&heads, &refs))
     }
 
     /// Return the committer date, in Unix seconds, of every local branch tip.
@@ -650,6 +652,19 @@ impl Git {
     /// `-`. Returns `false` when the output is empty, which means the branch
     /// has no commits ahead of `upstream`.
     pub fn cherry_merged(&self, upstream: &str, branch: &str) -> Result<bool> {
+        // Like patch-id, git cherry ignores merges. Matched ordinary commits
+        // do not prove that an unmatched conflict resolution is represented.
+        if !self
+            .run(&[
+                "rev-list",
+                "--merges",
+                "-1",
+                &format!("{upstream}..{branch}"),
+            ])?
+            .is_empty()
+        {
+            return Ok(false);
+        }
         let out = self.run(&["cherry", upstream, branch])?;
         // If all lines start with `-`, every commit was cherry-picked upstream.
         Ok(!out.is_empty() && out.lines().all(|l| l.starts_with('-')))
@@ -723,10 +738,19 @@ impl Git {
     /// common merge-base (unrelated histories).
     pub fn patch_id_match(&self, target: &str, branch: &str) -> Result<bool> {
         let range = format!("{target}..{branch}");
+        // Patch IDs omit merges, including unique conflict resolutions. A
+        // filtered history cannot prove those commits' content was integrated.
+        if !self
+            .run(&["rev-list", "--merges", "-1", &range])?
+            .is_empty()
+        {
+            return Ok(false);
+        }
         let branch_ids = self.patch_ids_for_range(&range)?;
         if branch_ids.is_empty() {
-            // Branch has no commits beyond target — already merged.
-            return Ok(true);
+            // Empty patches also disappear from patch-id output; only actual
+            // ancestry establishes that there are no unmatched commits.
+            return self.run_exit_code(&["merge-base", "--is-ancestor", branch, target]);
         }
 
         // Resolve merge-base; if unrelated histories, bail out as "no match".
@@ -765,7 +789,37 @@ impl Git {
     /// error. Requires `git >= 2.38` for the `--write-tree` option.
     pub fn merge_adds_nothing(&self, target: &str, branch: &str) -> Result<bool> {
         let args = ["merge-tree", "--write-tree", target, branch];
-        let output = self.spawn(&args)?;
+        // merge-tree writes objects even when used as an inspection. Keep
+        // those writes temporary, with the real store available read-only.
+        let objects = self.run(&[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "objects",
+        ])?;
+        let temporary = tempfile::tempdir().context("Cannot isolate simulated merge objects")?;
+        // Git's alternate list uses C-style quoting, so separators and quotes
+        // inside a repository path must not split it into multiple stores.
+        let mut alternates = std::ffi::OsString::from(serde_json::to_string(&objects)?);
+        if let Some(existing) = std::env::var_os("GIT_ALTERNATE_OBJECT_DIRECTORIES") {
+            alternates.push(if cfg!(windows) { ";" } else { ":" });
+            alternates.push(existing);
+        }
+        if self.verbose {
+            eprintln!("  $ git {} (isolated objects)", args.join(" "));
+        }
+        let mut cmd = Command::new("git");
+        cmd.args(args)
+            .env("GIT_OBJECT_DIRECTORY", temporary.path())
+            .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", alternates)
+            // Missing promisor objects must not trigger a hidden fetch.
+            .env("GIT_NO_LAZY_FETCH", "1");
+        if let Some(dir) = &self.workdir {
+            cmd.current_dir(dir);
+        }
+        let output = cmd
+            .output()
+            .context("Cannot simulate merge in isolated object storage")?;
 
         match output.status.code() {
             Some(0) => {
@@ -932,21 +986,70 @@ impl Git {
         Ok(!out.trim().is_empty())
     }
 
+    /// An orphan has no resolvable HEAD; its reflog retains the last checkout
+    /// commit, which also lets us protect staged changes rather than comparing
+    /// only the index to the working tree. Missing history is an error so the
+    /// caller requires explicit force authorization instead of assuming clean.
+    pub fn orphan_worktree_dirty(&self, path: &Path) -> Result<bool> {
+        let git = self.in_dir(path);
+        // HEAD@{0} follows the deleted branch's reflog, not the linked
+        // worktree's HEAD log. Read the latter's final new object explicitly.
+        let log = git.run(&[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "logs/HEAD",
+        ])?;
+        let history = std::fs::read_to_string(log).context("Cannot read orphan HEAD history")?;
+        let tip = history
+            .lines()
+            .last()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .context("Orphan HEAD history is empty; use --force only after inspecting its files")?;
+        let unchanged = git.run_exit_code(&["diff", "--quiet", tip, "--"])?;
+        // Staged content may differ even if the worktree was restored to tip.
+        let index_unchanged = git.run_exit_code(&["diff", "--cached", "--quiet", tip, "--"])?;
+        let untracked = git.run(&["ls-files", "--others", "--exclude-standard", "-z"])?;
+        Ok(!unchanged || !index_unchanged || !untracked.is_empty())
+    }
+
     /// List every tracked and untracked-but-not-ignored file inside `path`.
     ///
-    /// Runs `git ls-files --cached --others --exclude-standard` from `path`.
+    /// Runs `git ls-files -z --cached --others --exclude-standard` from `path`.
     /// Gitignored files (build output, caches, dependency directories) are
     /// excluded, so scanning these for the newest mtime cannot be fooled by a
     /// build or a dependency install.
-    pub fn worktree_files(&self, path: &Path) -> Result<Vec<String>> {
-        let out =
-            self.in_dir(path)
-                .run(&["ls-files", "--cached", "--others", "--exclude-standard"])?;
-        Ok(out
-            .lines()
-            .filter(|l| !l.is_empty())
-            .map(String::from)
-            .collect())
+    pub fn worktree_files(&self, path: &Path) -> Result<Vec<PathBuf>> {
+        let args = [
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ];
+        let out = self.in_dir(path).spawn(&args)?;
+        if !out.status.success() {
+            return Err(command_error("git", &args, &out).into());
+        }
+        // Line-oriented output is display-quoted by Git, not a filesystem path.
+        // Unix paths need their original bytes, including non-UTF-8 filenames.
+        out.stdout
+            .split(|b| *b == 0)
+            .filter(|name| !name.is_empty())
+            .map(|name| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStringExt;
+                    Ok(PathBuf::from(std::ffi::OsString::from_vec(name.to_vec())))
+                }
+                #[cfg(not(unix))]
+                {
+                    Ok(PathBuf::from(
+                        std::str::from_utf8(name).context("Cannot decode worktree filename")?,
+                    ))
+                }
+            })
+            .collect()
     }
 
     /// Return the committer date, in Unix seconds, of `rev` as seen from `path`.
@@ -967,7 +1070,8 @@ impl Git {
 
     /// Return the porcelain status of the current working directory.
     pub fn status_porcelain(&self) -> Result<String> {
-        self.run(&["status", "--porcelain"])
+        // Inventory must not refresh the index or compete for its lock.
+        self.run(&["--no-optional-locks", "status", "--porcelain"])
     }
 
     /// Check whether `branch` has at least one commit not present in **any**
@@ -1044,6 +1148,19 @@ impl Git {
         }
     }
 
+    /// Local edits must not copy effective inherited values into this scope.
+    fn config_get_all_local(&self, key: &str) -> Result<Vec<String>> {
+        match self.run(&["config", "--local", "--get-all", key]) {
+            Ok(out) => Ok(out
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect()),
+            Err(e) if is_unset_key(&e) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Get a single config value.
     pub fn config_get(&self, key: &str) -> Result<Option<String>> {
         match self.run(&["config", "--get", key]) {
@@ -1095,10 +1212,15 @@ impl Git {
     /// values, drop the matching ones, clear the key and re-add the rest in
     /// their original order. Removing a value that is not present is a no-op.
     pub fn config_remove_value(&self, key: &str, value: &str) -> Result<()> {
-        let mut values = self.config_get_all(key)?;
+        let mut values = self.config_get_all_local(key)?;
         let before = values.len();
         values.retain(|v| v != value);
         if values.len() == before {
+            if self.config_get_all(key)?.iter().any(|v| v == value) {
+                anyhow::bail!(
+                    "{key} = {value} is inherited, not repository-local; use `git config --show-origin --get-all {key}` to locate and edit its source"
+                );
+            }
             return Ok(());
         }
 
@@ -1368,6 +1490,157 @@ mod tests {
     use crate::test_helpers::{
         advance_remote, init_repo_with_local_remote, init_repo_with_worktree_config,
     };
+
+    #[test]
+    fn existing_local_upstreams_are_not_gone() -> Result<()> {
+        let (_dir, git) = crate::test_helpers::init_repo()?;
+        git.run(&["branch", "tracked"])?;
+        git.run(&["branch", "--set-upstream-to=main", "tracked"])?;
+        assert!(
+            !git.branches_with_gone_upstream()?
+                .contains(&"tracked".into())
+        );
+        git.run(&["checkout", "--detach"])?;
+        git.run(&["branch", "-D", "main"])?;
+        assert!(
+            git.branches_with_gone_upstream()?
+                .contains(&"tracked".into())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn unmatched_merge_resolutions_are_not_proven_merged_by_patch_ids() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        let base = git.run(&["rev-parse", "HEAD"])?;
+        let tree = git.run(&["rev-parse", "HEAD^{tree}"])?;
+        let left = git.run(&["commit-tree", &tree, "-p", &base, "-m", "left"])?;
+        let right = git.run(&["commit-tree", &tree, "-p", &base, "-m", "right"])?;
+        let target = git.run(&[
+            "commit-tree",
+            &tree,
+            "-p",
+            &left,
+            "-p",
+            &right,
+            "-m",
+            "target",
+        ])?;
+        std::fs::write(dir.path().join("resolution.txt"), "unique resolution")?;
+        git.run(&["add", "."])?;
+        let unique_tree = git.run(&["write-tree"])?;
+        let branch = git.run(&[
+            "commit-tree",
+            &unique_tree,
+            "-p",
+            &left,
+            "-p",
+            &right,
+            "-m",
+            "resolution",
+        ])?;
+        assert!(!git.patch_id_match(&target, &branch)?);
+        assert!(!git.trees_match(&target, &branch)?);
+        assert!(!git.run_exit_code(&["merge-base", "--is-ancestor", &branch, &target])?);
+        // Matching non-merge patches must not hide the unmatched merge either.
+        let advanced = git.run(&[
+            "commit-tree",
+            &unique_tree,
+            "-p",
+            &branch,
+            "-m",
+            "empty followup",
+        ])?;
+        assert!(!git.patch_id_match(&target, &advanced)?);
+        // A matched ordinary patch must not let the earlier cherry strategy
+        // bypass the merge-resolution safeguard in the complete scanner.
+        std::fs::write(dir.path().join("extra.txt"), "shared patch")?;
+        git.run(&["add", "."])?;
+        let branch_tree = git.run(&["write-tree"])?;
+        let branch_tip = git.run(&["commit-tree", &branch_tree, "-p", &branch, "-m", "extra"])?;
+        git.run(&["rm", "--cached", "resolution.txt"])?;
+        let target_tree = git.run(&["write-tree"])?;
+        let target_tip = git.run(&["commit-tree", &target_tree, "-p", &target, "-m", "extra"])?;
+        assert!(!git.cherry_merged(&target_tip, &branch_tip)?);
+        git.run(&["update-ref", "refs/heads/main", &target_tip])?;
+        git.run(&["branch", "unique-resolution", &branch_tip])?;
+        let filter = crate::branches::Filter::load(&git, &crate::config::Config::default())?;
+        let found = crate::branches::find_merged_local(
+            &git,
+            &filter,
+            crate::branches::Effort::Thorough,
+            1,
+            None,
+        )?;
+        assert!(!found.candidates.contains(&"unique-resolution".into()));
+        Ok(())
+    }
+
+    #[test]
+    fn repository_inspection_preserves_the_index_and_object_store() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        git.run(&["checkout", "-b", "feature"])?;
+        std::fs::write(dir.path().join("feature.txt"), "feature")?;
+        git.run(&["add", "."])?;
+        git.run(&["commit", "-m", "feature"])?;
+        git.run(&["checkout", "main"])?;
+        std::fs::write(dir.path().join("main.txt"), "main")?;
+        git.run(&["add", "."])?;
+        git.run(&["commit", "-m", "main"])?;
+        let before_objects = git.run(&["count-objects", "-v"])?;
+        let index = dir.path().join(".git/index");
+        let before_index = std::fs::read(&index)?;
+        let before_modified = std::fs::metadata(&index)?.modified()?;
+        // Unchanged contents with fresh stat data would normally refresh index.
+        let file = dir.path().join("main.txt");
+        std::fs::write(&file, std::fs::read(&file)?)?;
+        assert!(git.status_porcelain()?.is_empty());
+        assert!(!git.merge_adds_nothing("main", "feature")?);
+        assert_eq!(git.run(&["count-objects", "-v"])?, before_objects);
+        assert_eq!(std::fs::read(&index)?, before_index);
+        assert_eq!(std::fs::metadata(&index)?.modified()?, before_modified);
+        // Linked worktrees share the object store but have a different gitdir.
+        let linked = dir.path().join("linked worktree");
+        git.run(&[
+            "worktree",
+            "add",
+            "--detach",
+            linked.to_str().unwrap(),
+            "main",
+        ])?;
+        assert!(!git.in_dir(&linked).merge_adds_nothing("main", "feature")?);
+        assert_eq!(git.run(&["count-objects", "-v"])?, before_objects);
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_filenames_preserve_bytes_and_display_special_characters() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo()?;
+        let names = vec![PathBuf::from("é file.txt"), PathBuf::from(" space .txt")];
+        #[cfg(unix)]
+        let names = {
+            let mut names = names;
+            names.push(PathBuf::from("quote\"tab\tnewline\n.txt"));
+            // APFS requires valid Unicode names; byte-oriented filesystems
+            // still need explicit coverage for paths that cannot be UTF-8.
+            #[cfg(not(target_os = "macos"))]
+            {
+                use std::os::unix::ffi::OsStringExt;
+                names.push(PathBuf::from(std::ffi::OsString::from_vec(
+                    b"nonutf8\xff".to_vec(),
+                )));
+            }
+            names
+        };
+        for name in &names {
+            std::fs::write(dir.path().join(name), "recent content")?;
+        }
+        let files = git.worktree_files(dir.path())?;
+        for name in names {
+            assert!(files.contains(&name), "missing {name:?}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn config_readers_propagate_failures_that_are_not_an_unset_key() -> Result<()> {

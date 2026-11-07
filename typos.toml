@@ -14,3 +14,5 @@ extend-exclude = [
 # Deliberate misspellings that a test asserts on — typically the input to a
 # "did you mean ...?" diagnostic. Correcting one here deletes the test that
 # proves the suggestion works.
+# Windows tasklist's output-format switch is spelled /FO.
+FO = "FO"

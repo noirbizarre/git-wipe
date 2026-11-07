@@ -18,6 +18,7 @@ copyright_year = 2026
 crate = "git-wipe"
 description = "Wipe out merged local branches and worktrees"
 docs = false
+gh_ship_token_mode = "app"
 homebrew = true
 homebrew_tap = "noirbizarre/homebrew-tap"
 keywords = "git,branches,worktree,cleanup,merged"

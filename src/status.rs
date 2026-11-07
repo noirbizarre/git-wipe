@@ -155,7 +155,9 @@ pub fn scan(
     let pr_set: HashSet<&str> = merged.pr_merged.iter().map(String::as_str).collect();
     let closed_set: HashSet<&str> = merged.pr_closed.iter().map(String::as_str).collect();
 
-    let gone = find_gone_local(git, filter, &merged.candidates)?;
+    // Inventory labels are independent facts; cleanup's deduplication would
+    // otherwise hide deleted upstreams on already-merged branches.
+    let gone = find_gone_local(git, filter, &[])?;
     if !gone.is_empty() {
         ui.warning(STALE_GONE_WARNING);
         warnings.push(STALE_GONE_WARNING.to_string());
@@ -992,6 +994,25 @@ mod tests {
             scan.warnings
         );
         assert!(scan.rows.iter().any(|r| r.flags.gone));
+        Ok(())
+    }
+
+    #[test]
+    fn merged_branches_with_deleted_upstreams_keep_both_status_facts() -> Result<()> {
+        let (dir, git) = test_helpers::init_repo_with_gone_upstream()?;
+        let status = std::process::Command::new("git")
+            .args(["merge", "--no-edit", "feature/gone"])
+            .current_dir(dir.path().join("work"))
+            .status()?;
+        assert!(status.success());
+        let inventory = scan_repo(&git)?;
+        let row = inventory
+            .rows
+            .iter()
+            .find(|r| r.branch.as_deref() == Some("feature/gone"))
+            .unwrap();
+        assert!(row.flags.merged && row.flags.gone);
+        assert!(inventory.warnings.iter().any(|w| w == STALE_GONE_WARNING));
         Ok(())
     }
 

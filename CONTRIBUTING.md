@@ -14,6 +14,10 @@ Mise's postinstall hook installs both `pre-commit` and `commit-msg` hooks.
 Prek installs Commitizen and its Emotional plugin in an isolated Python environment
 for commit-message validation.
 
+Windows CI places build outputs and temporary files on a ReFS Dev Drive.
+The shared setup action exports `TMP`, `TEMP` and `TMPDIR` for all subsequent
+steps and child processes, with temporary storage outside the cached target directory.
+
 Rust itself is not managed by mise: `rust-toolchain.toml` pins the channel, and
 rustup installs it. CI uses `dtolnay/rust-toolchain` because it needs per-job
 components and cross-compilation targets.
@@ -132,7 +136,12 @@ no CI results. That means the repository needs:
 - a `release` environment holding the variable `APP_CLIENT_ID` and the secret
   `APP_PRIVATE_KEY`.
 - the corresponding GitHub App installed on `noirbizarre/git-wipe` with
-  Contents and Pull requests read/write permissions.
+  Contents, Actions, Pull requests and Issues read/write permissions.
+
+Preparation runs `gh ship sign` to re-create the release commit with GitHub's signature.
+
+Also configure:
+
 - squash-merge settings of `squash_merge_commit_title: PR_TITLE` and
   `squash_merge_commit_message: BLANK`, so the squash commit subject is the
   Conventional Commit title from `.github/ship.yml`.
@@ -163,9 +172,9 @@ git tpl merge          # take it
 `tpl:update` is safe to run at any time: it only advances the rendered ref.
 Nothing reaches your branch until the merge.
 
-Requires git-tpl on your PATH (`cargo install git-tpl`). It is not declared in
-`mise.toml`'s `[tools]` on purpose — it vendors libgit2, so a global entry
-would make every CI job compile a tool no CI job runs.
+`mise install` provides git-tpl through the declared `cargo:` tool. With
+cargo-binstall available, mise downloads its release archive rather than
+compiling the libgit2 dependency from source.
 
 Files carrying template-owned content — `mise.toml`, `prek.toml`, `Cargo.toml` —
 end with a `# --- project-specific ---` marker. Add below it; Git's 3-way merge

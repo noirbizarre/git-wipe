@@ -149,7 +149,7 @@ git wipe --yes
 # Also delete branches whose upstream branch was deleted
 git wipe -y --delete-gone
 
-# Also force-remove worktrees with uncommitted changes or unmerged commits
+# Also force-remove selected dirty worktrees with uncommitted changes
 git wipe -y --force
 
 # Machine-readable output (implies --yes)
@@ -375,6 +375,17 @@ Each of these has a counterpart: `add-`/`remove-` pairs for the `protected`,
 for individual branches. `git wipe config -h` lists them all, and each has its
 own man page (`man git-wipe-config-set`).
 
+With `--json`, successful configuration edits emit one acknowledgement with
+`status: "success"`, `action` (the subcommand), `target` (the key, pattern,
+remote, or branch), and `value` (the new value for `set`, otherwise `null`).
+Configuration listing retains its inventory schema. Interactive setup requires
+a terminal and cannot run with `--json`.
+
+Fatal status errors retain the status inventory schema with empty `entries`.
+Fatal cleanup errors preserve requested settings; settings that could not be
+resolved are `null`. Configuration errors contain `version`, `status: "error"`,
+`action`, `target`, and `errors` instead of a cleanup report.
+
 ## Configuration
 
 > [!IMPORTANT]
@@ -554,8 +565,9 @@ provider. git-wipe speaks to the forge API itself: no `gh`, `glab` or any other
 CLI is needed.
 
 **It is networked, and opt-in.** Enabling it sends the names of your candidate
-branches (never protected or ignored ones, nor the current branch) to the
-remote forge. It is never on by default.
+branches (never protected or ignored ones) to the remote forge. Local analysis
+excludes the current branch; remote analysis may query its remote-tracking
+counterpart. It is never on by default.
 
 **Authentication** comes from the environment only; tokens are never read from
 or written to git config.
@@ -742,8 +754,10 @@ CLI flags:
    `dirty + unmerged commits` hint.
 
    For selected branches that have worktrees, the worktree is removed first,
-   then the branch is deleted with `git branch -D` (force-delete is safe here
-   because the branch is already verified as merged into a protected target).
+   then the branch is deleted with `git branch -D` after selection and the
+   applicable safeguards. Git-detected or forge-confirmed merges have merge
+   evidence; closed-unmerged requests and deleted-upstream candidates may
+   contain commits absent from every protected target.
    Selected orphan worktrees are also removed in the same pass. When
    [worktrunk](https://worktrunk.dev) is enabled (via `--worktrunk` flag,
    `wipe.worktrunk` config, or auto-detection), removal is delegated to
@@ -868,31 +882,33 @@ mise install            # Install the pinned tools (git-cliff, prek, nextest, â€
 prek install            # Install the pre-commit and commit-msg git hooks
 ```
 
-The hooks are what enforce formatting, clippy and the commit convention
-locally; without them the first feedback comes from CI.
+The hooks check formatting and the commit convention locally. Run Clippy
+separately with `mise run lint`; it also runs in CI.
 
 ```sh
 mise run build          # Build the project
-mise run build:release  # Build in release mode
 mise run test           # Run tests with cargo-nextest
 mise run lint           # Run clippy
 mise run lint:actions   # Lint the GitHub Actions workflows
-mise run fmt            # Format code
-mise run fmt-check      # Check formatting without rewriting files
-mise run check          # Run all checks (fmt-check + lint + test)
+mise run format         # Format code
+mise run format:check   # Check formatting without rewriting files
+mise run check          # Run all non-modifying checks
 mise run cover          # Generate lcov coverage report
-mise run cover:html     # Generate HTML coverage report
 mise run changelog      # Preview the next version and changelog
 mise run ship:validate  # Validate the gh-ship release setup (needs gh + the gh-ship extension)
 mise run man            # Collect the generated man pages and completions
 mise run setup          # Install the binary, man pages and zsh completions locally
 ```
 
+See [Contributing: Tasks](CONTRIBUTING.md#tasks) for the maintained task inventory
+and [validation guidance](CONTRIBUTING.md#before-you-push) for choosing checks.
+
 ### Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/), enforced by
-commitlint via the prek `commit-msg` hook (a local check: the CI lint job runs
-the other hooks, not this one).
+Commitizen with [Emotional](https://github.com/noirbizarre/emotional) via the
+prek `commit-msg` hook (a local check: the CI lint job runs the other hooks,
+not this one).
 The changelog and the next version number are derived from them, so the type
 and scope matter.
 

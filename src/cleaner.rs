@@ -215,12 +215,15 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
 
     // ── 1. Fetch & prune ─────────────────────────────────────────────
 
-    // Whether every configured remote was refreshed this run. Deleted-upstream
-    // detection is only trustworthy when remote-tracking refs are up to date.
-    let mut fetch_succeeded = false;
+    // Freshness belongs to each upstream remote, not to the invocation: fetching
+    // origin cannot authorize deletion based on an unrefreshed upstream ref.
+    let mut refreshed_remotes = HashSet::new();
 
     report.fetch.skipped = opts.no_fetch;
     if !opts.no_fetch {
+        // Per-branch ignores have the same invisibility contract as patterns.
+        let mut fetch_ignores = config.ignore.clone();
+        fetch_ignores.extend(git.branch_ignored_list()?);
         let remotes = effective_remotes(git, config)?;
         if !remotes.is_empty() {
             ui.heading(&format!(
@@ -241,7 +244,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 let mut succeeded = 0usize;
                 for remote in &remotes {
                     let result = ui.spinner(&format!("Fetching {remote}…"), || {
-                        git.fetch_remote_prune(remote, &config.ignore)
+                        git.fetch_remote_prune(remote, &fetch_ignores)
                     });
                     match result {
                         Ok(prune_warning) => {
@@ -249,6 +252,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                                 warn(ui, &mut report, &message);
                             }
                             succeeded += 1;
+                            refreshed_remotes.insert(remote.clone());
                             ui.success(&format!("{} updated.", console::style(remote).cyan()));
                             report.fetch.remotes.push(RemoteFetch {
                                 name: remote.clone(),
@@ -276,7 +280,6 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         ),
                     );
                 } else if succeeded > 0 {
-                    fetch_succeeded = true;
                     ui.success("Remotes updated.");
                 }
             }
@@ -392,19 +395,25 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
         // remote-tracking refs, so this requires a successful fetch — except in
         // --dry-run, where nothing is deleted and an empty preview would be
         // useless.
-        let gone = if fetch_succeeded || opts.dry_run {
-            let gone = ui.spinner("Scanning for deleted upstreams…", || {
+        let gone = {
+            let found = ui.spinner("Scanning for deleted upstreams…", || {
                 find_gone_local(git, &filter, &merged)
             })?;
-            // Unlike `status`, which never fetches and so warns whenever it
-            // reports a `gone` entry, a wipe run only warns when no fetch
-            // succeeded to refresh the refs first.
-            if !gone.is_empty() && !fetch_succeeded {
+            let mut gone = Vec::new();
+            let mut stale = false;
+            for branch in found {
+                let fresh = git.branch_upstream(&branch)?.is_some_and(|(remote, _)| {
+                    remote == "." || refreshed_remotes.contains(&remote)
+                });
+                if fresh || opts.dry_run {
+                    stale |= !fresh;
+                    gone.push(branch);
+                }
+            }
+            if stale {
                 warn(ui, &mut report, crate::status::STALE_GONE_WARNING);
             }
             gone
-        } else {
-            Vec::new()
         };
         let gone_set: HashSet<String> = gone.iter().cloned().collect();
 
@@ -428,14 +437,31 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
         // Build a map of branch → worktree for branches that have one.
         let mut worktrees = git.worktree_list()?;
 
-        // Resolve stale locks once, up front, over every worktree (branch
-        // associated or not) so wt_map, orphans and every guard check below
-        // already see them as unlocked. See `resolve_stale_lock` for what
-        // "stale" means and how `--dry-run` is handled.
+        // Inspect only cleanup candidates, without unlocking: selection and
+        // every other guard must authorize a mutation before it happens.
+        let mut orphans = if !opts.no_worktrees {
+            find_orphan_worktrees(git, &filter)?
+        } else {
+            Vec::new()
+        };
+        let orphan_paths: HashSet<_> = orphans.iter().map(|wt| wt.path.clone()).collect();
+        let mut pending_locks: HashMap<PathBuf, Worktree> = HashMap::new();
         let mut stale_locks: HashMap<PathBuf, StaleLock> = HashMap::new();
         for wt in &mut worktrees {
-            if let Some(entry) = resolve_stale_lock(git, ui, &mut report, opts.dry_run, wt) {
-                stale_locks.insert(wt.path.clone(), entry);
+            let eligible = !opts.no_worktrees
+                && (orphan_paths.contains(&wt.path)
+                    || wt.branch.as_ref().is_some_and(|b| candidates.contains(b)));
+            if eligible
+                && wt.is_locked
+                && wt
+                    .lock_reason
+                    .as_deref()
+                    .and_then(pid::extract_pid)
+                    .is_some_and(|pid| pid::pid_is_alive(pid) == Some(false))
+            {
+                pending_locks.insert(wt.path.clone(), wt.clone());
+                wt.is_locked = false;
+                wt.lock_reason = None;
             }
         }
 
@@ -445,19 +471,9 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             .filter_map(|wt| wt.branch.as_ref().map(|b| (b.clone(), (*wt).clone())))
             .collect();
 
-        // Collect orphan worktrees (if worktree cleanup is enabled).
-        let mut orphans = if !opts.no_worktrees {
-            find_orphan_worktrees(git, &filter)?
-        } else {
-            Vec::new()
-        };
-        // `find_orphan_worktrees` re-fetches the worktree list itself. In live
-        // mode that fresh fetch already reflects the real unlock above; in
-        // `--dry-run` nothing was actually unlocked, so patch in the same
-        // decision so orphan worktrees get the same "would unlock" treatment
-        // as branch-associated ones.
+        // Mirror inspection in the orphan snapshot; disk remains untouched.
         for wt in &mut orphans {
-            if stale_locks.contains_key(&wt.path) {
+            if pending_locks.contains_key(&wt.path) {
                 wt.is_locked = false;
                 wt.lock_reason = None;
             }
@@ -692,8 +708,8 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             // check whether the worktree is dirty (untracked / uncommitted
             // changes) or whether the branch has commits not contained in any
             // merge target (relevant for `wt remove`, which refuses unmerged
-            // branches without `--force-delete`). Orphan worktrees keep the
-            // existing auto-force behavior and are not surfaced here.
+            // branches without `--force-delete`). Orphans receive the same
+            // explicit authorization below, using their path as identity.
             let targets_for_unmerged = if opts.use_worktrunk {
                 match resolve_merge_targets(git, &filter) {
                     Ok(targets) => targets,
@@ -903,6 +919,25 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         }
                         let (force, force_delete) =
                             force_map.get(branch).copied().unwrap_or((false, false));
+                        if let Some(mut locked) = pending_locks.remove(&wt.path) {
+                            if let Some(entry) =
+                                resolve_stale_lock(git, ui, &mut report, opts.dry_run, &mut locked)
+                            {
+                                stale_locks.insert(wt.path.clone(), entry);
+                            } else {
+                                // The owner may have become live since inspection.
+                                skip_set.insert(branch.clone());
+                                report.local.worktrees.push(WorktreeEntry {
+                                    path: path_string(&wt.path),
+                                    branch: wt.branch.clone(),
+                                    kind: WorktreeKind::Branch,
+                                    status: ItemStatus::Locked,
+                                    size_kb: sizes.get(&wt.path).map(|&b| b / 1024),
+                                    stale_lock: None,
+                                });
+                                continue;
+                            }
+                        }
                         if opts.dry_run {
                             ui.dry_run(&format!(
                                 "Would remove worktree '{}'.",
@@ -970,6 +1005,63 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     if !selected.contains(&key) {
                         continue;
                     }
+                    // A missing branch ref says nothing about uncommitted
+                    // files. Failed inspection must never authorize removal.
+                    let dirty = match git.orphan_worktree_dirty(&wt.path) {
+                        Ok(dirty) => dirty,
+                        Err(err) => {
+                            warn(
+                                ui,
+                                &mut report,
+                                &format!(
+                                    "Could not check orphan '{}': {err}; explicit force is required.",
+                                    tilde_path(&wt.path)
+                                ),
+                            );
+                            true
+                        }
+                    };
+                    let force = if dirty && !opts.yes {
+                        !ui.multi_select(
+                            "Select orphan worktrees to force-remove (unselected will be skipped)",
+                            std::slice::from_ref(&key),
+                            &[tilde_path(&wt.path)],
+                            &[opts.force],
+                            &["dirty or status unknown".to_string()],
+                            true,
+                        )?
+                        .is_empty()
+                    } else {
+                        opts.force
+                    };
+                    if dirty && !force {
+                        report.local.worktrees.push(WorktreeEntry {
+                            path: path_string(&wt.path),
+                            branch: wt.branch.clone(),
+                            kind: WorktreeKind::Orphan,
+                            status: ItemStatus::Skipped,
+                            size_kb: sizes.get(&wt.path).map(|&b| b / 1024),
+                            stale_lock: stale_locks.get(&wt.path).cloned(),
+                        });
+                        continue;
+                    }
+                    if let Some(mut locked) = pending_locks.remove(&wt.path) {
+                        if let Some(entry) =
+                            resolve_stale_lock(git, ui, &mut report, opts.dry_run, &mut locked)
+                        {
+                            stale_locks.insert(wt.path.clone(), entry);
+                        } else {
+                            report.local.worktrees.push(WorktreeEntry {
+                                path: path_string(&wt.path),
+                                branch: wt.branch.clone(),
+                                kind: WorktreeKind::Orphan,
+                                status: ItemStatus::Locked,
+                                size_kb: sizes.get(&wt.path).map(|&b| b / 1024),
+                                stale_lock: None,
+                            });
+                            continue;
+                        }
+                    }
                     if opts.dry_run {
                         ui.dry_run(&format!(
                             "Would remove worktree '{}'.",
@@ -986,6 +1078,9 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     } else {
                         let result = ui.spinner(
                             &format!("Removing worktree {}…", tilde_path(&wt.path)),
+                            // Git sees a missing HEAD as dirty even when the
+                            // reflog comparison above proved the files clean.
+                            // Authorization has already been enforced here.
                             || remove_worktree(git, wt, opts.use_worktrunk, true, false),
                         );
                         let status = match result {
@@ -1821,6 +1916,48 @@ mod tests {
     fn without_a_forge_everything_is_preselected_but_dirty_worktrees() {
         assert!(default_selected(false, false, false));
         assert!(!default_selected(false, false, true));
+    }
+
+    #[test]
+    fn fetching_one_remote_does_not_authorize_another_remotes_gone_branches() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo_with_gone_upstream()?;
+        let work = dir.path().join("work");
+        for args in [
+            vec!["remote", "add", "other", "../origin.git"],
+            vec!["config", "branch.feature/gone.remote", "other"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&work)
+                    .status()?
+                    .success()
+            );
+        }
+        let mut cfg = default_config();
+        cfg.remotes = Some(vec!["origin".into()]);
+        let mut opts = opts_yes_with_fetch();
+        opts.delete_gone = true;
+        let report = run(&git, &cfg, &Ui::new(), &opts)?;
+        assert!(git.local_branches()?.contains(&"feature/gone".into()));
+        assert!(!report.local.gone.contains(&"feature/gone".into()));
+        Ok(())
+    }
+
+    #[test]
+    fn per_branch_ignored_refs_are_not_fetched() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo_with_gone_upstream()?;
+        git.set_branch_ignored("feature/alive", true)?;
+        let status = Command::new("git")
+            .args(["update-ref", "-d", "refs/remotes/origin/feature/alive"])
+            .current_dir(dir.path().join("work"))
+            .status()?;
+        assert!(status.success());
+        run(&git, &default_config(), &Ui::new(), &opts_yes_with_fetch())?;
+        let tips = git.ref_tips("refs/remotes/origin/")?;
+        assert!(!tips.contains_key("feature/alive"));
+        assert!(tips.contains_key("main"));
+        Ok(())
     }
 
     #[test]
@@ -3529,6 +3666,36 @@ mod tests {
         assert_eq!(entry.branch.as_deref(), Some("feature/locked-wt"));
         assert_eq!(entry.status, ItemStatus::Locked);
         assert_eq!(report.summary.worktrees_removed, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn out_of_scope_worktrees_keep_their_stale_locks() -> Result<()> {
+        for scope in ["disabled", "ignored", "protected", "young", "dirty"] {
+            let (_dir, git, wt_path) = crate::test_helpers::init_repo_with_stale_locked_worktree()?;
+            // Git canonicalizes linked-worktree paths; macOS temporary roots
+            // can use /var while Git reports the /private/var destination.
+            // Canonicalize both sides since Windows adds a verbatim prefix
+            // that Git's listing omits even when both identify the same path.
+            let expected_path = std::fs::canonicalize(&wt_path)?;
+            let mut config = default_config();
+            let mut opts = opts_yes_skip_network();
+            match scope {
+                "disabled" => opts.no_worktrees = true,
+                "ignored" => config.ignore.push("feature/stale-locked-wt".into()),
+                "protected" => config.protected.push("feature/stale-locked-wt".into()),
+                "young" => opts.min_age = "1d".parse()?,
+                "dirty" => std::fs::write(Path::new(&wt_path).join("untracked.txt"), "keep")?,
+                _ => unreachable!(),
+            }
+            run(&git, &config, &Ui::new(), &opts)?;
+            let wt = git
+                .worktree_list()?
+                .into_iter()
+                .find(|wt| std::fs::canonicalize(&wt.path).is_ok_and(|path| path == expected_path))
+                .expect("worktree survives");
+            assert!(wt.is_locked, "scope {scope} must not authorize unlocking");
+        }
         Ok(())
     }
 

@@ -1,8 +1,8 @@
 //! Wipe out merged local branches and worktrees
 //!
-//! The engine lives here; `src/main.rs` is a thin CLI over it. That split is
-//! what lets the integration tests assert against the library for behaviour
-//! and against the binary for output.
+//! This library retains the template's error and entry-point scaffolding.
+//! The cleanup engine currently belongs to the binary's modules; it is not
+//! exposed through this library. Integration tests exercise the binary.
 
 // miette's `Diagnostic` payloads carry source text and spans, which puts most
 // error variants past clippy's 128-byte `Result` threshold. The lint is right
@@ -15,11 +15,7 @@ pub mod error;
 
 pub use error::{Error, Result};
 
-/// Run the thing.
-///
-/// # Errors
-///
-/// Returns [`Error`] when there is nothing to do.
+/// Placeholder entry point retained from the template; currently always succeeds.
 pub fn run() -> Result<()> {
     Ok(())
 }
