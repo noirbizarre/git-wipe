@@ -565,8 +565,9 @@ provider. git-wipe speaks to the forge API itself: no `gh`, `glab` or any other
 CLI is needed.
 
 **It is networked, and opt-in.** Enabling it sends the names of your candidate
-branches (never protected or ignored ones, nor the current branch) to the
-remote forge. It is never on by default.
+branches (never protected or ignored ones) to the remote forge. Local analysis
+excludes the current branch; remote analysis may query its remote-tracking
+counterpart. It is never on by default.
 
 **Authentication** comes from the environment only; tokens are never read from
 or written to git config.
