@@ -110,6 +110,10 @@ tempfile = "3"
 thiserror = "2"
 miette = { version = "7", features = ["fancy"] }
 
+[target.'cfg(unix)'.dependencies]
+# A safe signal-zero syscall preserves ESRCH/EPERM distinctions for lock owners.
+rustix = { version = "1", features = ["process"] }
+
 [build-dependencies]
 # `build.rs` compiles `src/cli.rs` (and the modules it uses) out of tree to
 # derive the man pages and completions, so their dependencies are needed here

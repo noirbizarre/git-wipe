@@ -7,7 +7,7 @@
 //! lock (owner gone) from a *held* one (owner still there) or an *opaque* one
 //! (no pid to check at all).
 
-#[cfg(any(all(unix, not(target_os = "linux")), windows))]
+#[cfg(windows)]
 use std::process::Command;
 
 /// Extract a process id from a free-form lock reason string.
@@ -64,32 +64,51 @@ pub fn extract_pid(reason: &str) -> Option<u32> {
 /// environment. Callers must treat `None` the same as "alive" — the
 /// conservative choice, since acting on a lock we cannot confirm is dead would
 /// risk destroying a worktree someone is still using.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub fn pid_is_alive(pid: u32) -> Option<bool> {
-    Some(std::path::Path::new(&format!("/proc/{pid}")).exists())
+    // Zero identifies a process group; out-of-range values cannot identify an
+    // OS process. Never cast them to negative group IDs accidentally.
+    if pid == 0 {
+        return None;
+    }
+    let Ok(raw) = i32::try_from(pid) else {
+        return Some(false);
+    };
+    let pid = rustix::process::Pid::from_raw(raw)?;
+    probe_liveness(rustix::process::test_kill_process(pid))
 }
 
-/// macOS and BSD have no `/proc` by default; `kill -0` is POSIX and sends no
-/// signal, only checks whether the target process (or process group) exists
-/// and is one we could otherwise signal.
-#[cfg(all(unix, not(target_os = "linux")))]
-pub fn pid_is_alive(pid: u32) -> Option<bool> {
-    Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .output()
-        .ok()
-        .map(|out| out.status.success())
+#[cfg(unix)]
+fn probe_liveness(result: rustix::io::Result<()>) -> Option<bool> {
+    match result {
+        Ok(()) | Err(rustix::io::Errno::PERM) => Some(true),
+        Err(rustix::io::Errno::SRCH) => Some(false),
+        // Resource, syscall and permission-inspection failures are not death.
+        Err(_) => None,
+    }
 }
 
 #[cfg(windows)]
 pub fn pid_is_alive(pid: u32) -> Option<bool> {
     let out = Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        // An unfiltered CSV inventory avoids localized no-match messages.
+        .args(["/NH", "/FO", "CSV"])
         .output()
         .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let pid_str = pid.to_string();
-    Some(text.split_whitespace().any(|tok| tok == pid_str))
+    if !out.status.success() {
+        return None;
+    }
+    let text = std::str::from_utf8(&out.stdout).ok()?;
+    let mut seen = false;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let found = line.split("\",\"").nth(1)?.parse::<u32>().ok()?;
+        if found == pid {
+            return Some(true);
+        }
+        seen = true;
+    }
+    // Empty or malformed output is not evidence that a process disappeared.
+    seen.then_some(false)
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -100,6 +119,17 @@ pub fn pid_is_alive(_pid: u32) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn only_definite_absence_marks_a_lock_owner_dead() {
+        use rustix::io::Errno;
+        assert_eq!(probe_liveness(Ok(())), Some(true));
+        assert_eq!(probe_liveness(Err(Errno::PERM)), Some(true));
+        assert_eq!(probe_liveness(Err(Errno::SRCH)), Some(false));
+        assert_eq!(probe_liveness(Err(Errno::IO)), None);
+        assert_eq!(pid_is_alive(0), None);
+    }
 
     #[test]
     fn extract_pid_equals_sign() {
