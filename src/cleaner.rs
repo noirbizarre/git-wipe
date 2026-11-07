@@ -215,9 +215,9 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
 
     // ── 1. Fetch & prune ─────────────────────────────────────────────
 
-    // Whether every configured remote was refreshed this run. Deleted-upstream
-    // detection is only trustworthy when remote-tracking refs are up to date.
-    let mut fetch_succeeded = false;
+    // Freshness belongs to each upstream remote, not to the invocation: fetching
+    // origin cannot authorize deletion based on an unrefreshed upstream ref.
+    let mut refreshed_remotes = HashSet::new();
 
     report.fetch.skipped = opts.no_fetch;
     if !opts.no_fetch {
@@ -249,6 +249,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                                 warn(ui, &mut report, &message);
                             }
                             succeeded += 1;
+                            refreshed_remotes.insert(remote.clone());
                             ui.success(&format!("{} updated.", console::style(remote).cyan()));
                             report.fetch.remotes.push(RemoteFetch {
                                 name: remote.clone(),
@@ -276,7 +277,6 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         ),
                     );
                 } else if succeeded > 0 {
-                    fetch_succeeded = true;
                     ui.success("Remotes updated.");
                 }
             }
@@ -392,19 +392,25 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
         // remote-tracking refs, so this requires a successful fetch — except in
         // --dry-run, where nothing is deleted and an empty preview would be
         // useless.
-        let gone = if fetch_succeeded || opts.dry_run {
-            let gone = ui.spinner("Scanning for deleted upstreams…", || {
+        let gone = {
+            let found = ui.spinner("Scanning for deleted upstreams…", || {
                 find_gone_local(git, &filter, &merged)
             })?;
-            // Unlike `status`, which never fetches and so warns whenever it
-            // reports a `gone` entry, a wipe run only warns when no fetch
-            // succeeded to refresh the refs first.
-            if !gone.is_empty() && !fetch_succeeded {
+            let mut gone = Vec::new();
+            let mut stale = false;
+            for branch in found {
+                let fresh = git.branch_upstream(&branch)?.is_some_and(|(remote, _)| {
+                    remote == "." || refreshed_remotes.contains(&remote)
+                });
+                if fresh || opts.dry_run {
+                    stale |= !fresh;
+                    gone.push(branch);
+                }
+            }
+            if stale {
                 warn(ui, &mut report, crate::status::STALE_GONE_WARNING);
             }
             gone
-        } else {
-            Vec::new()
         };
         let gone_set: HashSet<String> = gone.iter().cloned().collect();
 
@@ -1907,6 +1913,32 @@ mod tests {
     fn without_a_forge_everything_is_preselected_but_dirty_worktrees() {
         assert!(default_selected(false, false, false));
         assert!(!default_selected(false, false, true));
+    }
+
+    #[test]
+    fn fetching_one_remote_does_not_authorize_another_remotes_gone_branches() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo_with_gone_upstream()?;
+        let work = dir.path().join("work");
+        for args in [
+            vec!["remote", "add", "other", "../origin.git"],
+            vec!["config", "branch.feature/gone.remote", "other"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&work)
+                    .status()?
+                    .success()
+            );
+        }
+        let mut cfg = default_config();
+        cfg.remotes = Some(vec!["origin".into()]);
+        let mut opts = opts_yes_with_fetch();
+        opts.delete_gone = true;
+        let report = run(&git, &cfg, &Ui::new(), &opts)?;
+        assert!(git.local_branches()?.contains(&"feature/gone".into()));
+        assert!(!report.local.gone.contains(&"feature/gone".into()));
+        Ok(())
     }
 
     #[test]
