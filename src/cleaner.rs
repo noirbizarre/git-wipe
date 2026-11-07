@@ -221,6 +221,9 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
 
     report.fetch.skipped = opts.no_fetch;
     if !opts.no_fetch {
+        // Per-branch ignores have the same invisibility contract as patterns.
+        let mut fetch_ignores = config.ignore.clone();
+        fetch_ignores.extend(git.branch_ignored_list()?);
         let remotes = effective_remotes(git, config)?;
         if !remotes.is_empty() {
             ui.heading(&format!(
@@ -241,7 +244,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 let mut succeeded = 0usize;
                 for remote in &remotes {
                     let result = ui.spinner(&format!("Fetching {remote}…"), || {
-                        git.fetch_remote_prune(remote, &config.ignore)
+                        git.fetch_remote_prune(remote, &fetch_ignores)
                     });
                     match result {
                         Ok(prune_warning) => {
@@ -1938,6 +1941,22 @@ mod tests {
         let report = run(&git, &cfg, &Ui::new(), &opts)?;
         assert!(git.local_branches()?.contains(&"feature/gone".into()));
         assert!(!report.local.gone.contains(&"feature/gone".into()));
+        Ok(())
+    }
+
+    #[test]
+    fn per_branch_ignored_refs_are_not_fetched() -> Result<()> {
+        let (dir, git) = crate::test_helpers::init_repo_with_gone_upstream()?;
+        git.set_branch_ignored("feature/alive", true)?;
+        let status = Command::new("git")
+            .args(["update-ref", "-d", "refs/remotes/origin/feature/alive"])
+            .current_dir(dir.path().join("work"))
+            .status()?;
+        assert!(status.success());
+        run(&git, &default_config(), &Ui::new(), &opts_yes_with_fetch())?;
+        let tips = git.ref_tips("refs/remotes/origin/")?;
+        assert!(!tips.contains_key("feature/alive"));
+        assert!(tips.contains_key("main"));
         Ok(())
     }
 
