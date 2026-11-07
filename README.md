@@ -881,8 +881,8 @@ mise install            # Install the pinned tools (git-cliff, prek, nextest, â€
 prek install            # Install the pre-commit and commit-msg git hooks
 ```
 
-The hooks are what enforce formatting, clippy and the commit convention
-locally; without them the first feedback comes from CI.
+The hooks check formatting and the commit convention locally. Run Clippy
+separately with `mise run lint`; it also runs in CI.
 
 ```sh
 mise run build          # Build the project
@@ -905,8 +905,9 @@ and [validation guidance](CONTRIBUTING.md#before-you-push) for choosing checks.
 ### Commits
 
 [Conventional Commits](https://www.conventionalcommits.org/), enforced by
-commitlint via the prek `commit-msg` hook (a local check: the CI lint job runs
-the other hooks, not this one).
+Commitizen with [Emotional](https://github.com/noirbizarre/emotional) via the
+prek `commit-msg` hook (a local check: the CI lint job runs the other hooks,
+not this one).
 The changelog and the next version number are derived from them, so the type
 and scope matter.
 
