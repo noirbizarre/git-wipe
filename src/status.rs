@@ -55,6 +55,8 @@ pub struct Flags {
     /// Merged, as reported by the forge. Implies `merged`, and is rendered in
     /// its place.
     pub pr_merged: bool,
+    /// Closed without merging, at the current tip; replaces the generic candidate flag.
+    pub pr_closed: bool,
     pub gone: bool,
     pub unmerged: bool,
     pub dirty: bool,
@@ -96,7 +98,7 @@ pub struct StatusOptions {
     pub show_size: bool,
     /// `--merged`: list only rows flagged as merged.
     pub merged_only: bool,
-    /// Whether the forge is asked about merged pull/merge requests first.
+    /// Whether the forge is asked about merged or closed pull/merge requests first.
     pub forge: ForgeSetting,
 }
 
@@ -151,6 +153,7 @@ pub fn scan(
     warnings.extend(merged.warnings.iter().cloned());
     let merged_set: HashSet<&str> = merged.candidates.iter().map(String::as_str).collect();
     let pr_set: HashSet<&str> = merged.pr_merged.iter().map(String::as_str).collect();
+    let closed_set: HashSet<&str> = merged.pr_closed.iter().map(String::as_str).collect();
 
     let gone = find_gone_local(git, filter, &merged.candidates)?;
     if !gone.is_empty() {
@@ -232,6 +235,7 @@ pub fn scan(
                 branch,
                 &merged_set,
                 &pr_set,
+                &closed_set,
                 &gone_set,
                 &unmerged,
             );
@@ -263,6 +267,7 @@ pub fn scan(
             branch,
             &merged_set,
             &pr_set,
+            &closed_set,
             &gone_set,
             &unmerged,
         );
@@ -293,12 +298,14 @@ fn set_merge_flags(
     branch: &str,
     merged: &HashSet<&str>,
     pr_merged: &HashSet<&str>,
+    pr_closed: &HashSet<&str>,
     gone: &HashSet<&str>,
     unmerged: &HashMap<&str, bool>,
 ) {
     if merged.contains(branch) {
         flags.merged = true;
         flags.pr_merged = pr_merged.contains(branch);
+        flags.pr_closed = pr_closed.contains(branch);
     } else {
         flags.unmerged = unmerged.get(branch).copied().unwrap_or(false);
     }
@@ -354,8 +361,12 @@ pub fn status_tokens(flags: Flags) -> Vec<&'static str> {
     for (set, token) in [
         (flags.orphan, "orphan"),
         (flags.locked, "locked"),
-        (flags.merged && !flags.pr_merged, "merged"),
+        (
+            flags.merged && !flags.pr_merged && !flags.pr_closed,
+            "merged",
+        ),
         (flags.pr_merged, "pr-merged"),
+        (flags.pr_closed, "pr-closed"),
         (flags.gone, "gone"),
         (flags.unmerged, "unmerged"),
         (flags.dirty, "dirty"),
@@ -372,7 +383,7 @@ pub fn status_tokens(flags: Flags) -> Vec<&'static str> {
 fn style_token(token: &str) -> String {
     let styled = console::style(token);
     match token {
-        "merged" | "pr-merged" => styled.green(),
+        "merged" | "pr-merged" | "pr-closed" => styled.green(),
         "gone" => styled.yellow(),
         "dirty" => styled.red(),
         "unmerged" => styled.cyan(),
@@ -521,6 +532,7 @@ pub fn to_report(rows: &[Row], warnings: Vec<String>) -> StatusReport {
                     "locked" => StatusFlag::Locked,
                     "merged" => StatusFlag::Merged,
                     "pr-merged" => StatusFlag::PrMerged,
+                    "pr-closed" => StatusFlag::PrClosed,
                     "gone" => StatusFlag::Gone,
                     "unmerged" => StatusFlag::Unmerged,
                     "dirty" => StatusFlag::Dirty,
@@ -625,6 +637,7 @@ mod tests {
             "done",
             &merged,
             &HashSet::new(),
+            &HashSet::new(),
             &gone,
             &unmerged,
         );
@@ -642,6 +655,7 @@ mod tests {
             "done",
             &merged,
             &HashSet::new(),
+            &HashSet::new(),
             &gone,
             &HashMap::new(),
         );
@@ -658,10 +672,32 @@ mod tests {
             &merged,
             &merged,
             &HashSet::new(),
+            &HashSet::new(),
             &HashMap::new(),
         );
         assert!(flags.merged && flags.pr_merged);
         assert_eq!(status_tokens(flags), ["pr-merged"]);
+    }
+
+    #[test]
+    fn a_closed_unmerged_request_renders_as_pr_closed_in_text_and_json() {
+        let branches = HashSet::from(["closed"]);
+        let mut flags = Flags::default();
+        set_merge_flags(
+            &mut flags,
+            "closed",
+            &branches,
+            &HashSet::new(),
+            &branches,
+            &HashSet::new(),
+            &HashMap::from([("closed", true)]),
+        );
+        assert!(flags.merged && flags.pr_closed && !flags.unmerged);
+        assert_eq!(status_tokens(flags), ["pr-closed"]);
+        assert_eq!(
+            serde_json::to_value(StatusFlag::PrClosed).unwrap(),
+            "pr-closed"
+        );
     }
 
     // ── Age formatting ───────────────────────────────────────────────

@@ -5,14 +5,16 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Value, json};
 
 use super::http;
-use super::{Forge, ForgeError, RemoteUrl, token_from_env};
+use super::{
+    FinishedHeads, Forge, ForgeError, RemoteUrl, RequestHead, RequestState, token_from_env,
+};
 
-/// Branches asked about per request. Each becomes an aliased `pullRequests`
-/// field, so this bounds the query size, not the number of requests per branch.
+/// Branches asked about per request. Each becomes two aliased `pullRequests`
+/// fields, so this bounds the query size, not the number of requests per branch.
 const BATCH: usize = 40;
 
-/// Merged pull requests inspected per branch name. A name reused by many
-/// merged pull requests (`patch-1`) is only searched this deep.
+/// Pull requests inspected per state and branch name. Separate budgets keep
+/// closed requests from crowding previously detectable merges out of the query.
 const PER_BRANCH: usize = 20;
 
 pub struct GitHub {
@@ -60,10 +62,7 @@ impl Forge for GitHub {
         format!("GitHub {}/{}", self.project.host, self.project.path)
     }
 
-    fn merged_heads(
-        &self,
-        branches: &[&str],
-    ) -> Result<HashMap<String, HashSet<String>>, ForgeError> {
+    fn finished_heads(&self, branches: &[&str]) -> Result<FinishedHeads, ForgeError> {
         let Some(token) = self.token() else {
             let names = if self.is_dotcom() {
                 "GITHUB_TOKEN or GH_TOKEN"
@@ -92,7 +91,7 @@ impl Forge for GitHub {
     }
 }
 
-/// One aliased `pullRequests` selection per branch, the names passed as
+/// Two aliased `pullRequests` selections per branch, the names passed as
 /// variables rather than spliced into the query.
 fn build_query(owner: &str, name: &str, branches: &[&str]) -> (String, Value) {
     let mut declarations = String::from("$owner: String!, $name: String!");
@@ -101,10 +100,13 @@ fn build_query(owner: &str, name: &str, branches: &[&str]) -> (String, Value) {
 
     for (i, branch) in branches.iter().enumerate() {
         declarations.push_str(&format!(", $b{i}: String!"));
-        selections.push_str(&format!(
-            " r{i}: pullRequests(headRefName: $b{i}, states: MERGED, first: {PER_BRANCH}) \
-             {{ nodes {{ headRefOid }} }}"
-        ));
+        for (alias, state) in [("m", "MERGED"), ("c", "CLOSED")] {
+            // Give merged requests their original search budget despite abandoned requests.
+            selections.push_str(&format!(
+                " {alias}{i}: pullRequests(headRefName: $b{i}, states: {state}, first: {PER_BRANCH}) \
+                 {{ nodes {{ headRefOid state }} }}"
+            ));
+        }
         variables[format!("b{i}")] = json!(branch);
     }
 
@@ -114,11 +116,8 @@ fn build_query(owner: &str, name: &str, branches: &[&str]) -> (String, Value) {
     (query, variables)
 }
 
-/// Read the `r<i>` aliases of a [`build_query`] response back into branches.
-fn parse_response(
-    data: &Value,
-    branches: &[&str],
-) -> Result<HashMap<String, HashSet<String>>, ForgeError> {
+/// Read both state-specific aliases of a [`build_query`] response back into branches.
+fn parse_response(data: &Value, branches: &[&str]) -> Result<FinishedHeads, ForgeError> {
     let repository = data
         .get("repository")
         .filter(|r| !r.is_null())
@@ -126,13 +125,22 @@ fn parse_response(
 
     let mut found = HashMap::new();
     for (i, branch) in branches.iter().enumerate() {
-        let heads: HashSet<String> = repository
-            .get(format!("r{i}"))
-            .and_then(|r| r.get("nodes"))
-            .and_then(Value::as_array)
-            .into_iter()
+        let heads: HashSet<RequestHead> = [format!("m{i}"), format!("c{i}")]
+            .iter()
+            .filter_map(|alias| repository.get(alias))
+            .filter_map(|r| r.get("nodes").and_then(Value::as_array))
             .flatten()
-            .filter_map(|node| node.get("headRefOid")?.as_str().map(str::to_string))
+            .filter_map(|node| {
+                let state = match node.get("state")?.as_str()? {
+                    "MERGED" => RequestState::Merged,
+                    "CLOSED" => RequestState::Closed,
+                    _ => return None,
+                };
+                Some(RequestHead {
+                    sha: node.get("headRefOid")?.as_str()?.to_string(),
+                    state,
+                })
+            })
             .collect();
         if !heads.is_empty() {
             found.insert((*branch).to_string(), heads);
@@ -149,7 +157,8 @@ mod tests {
     fn query_passes_branch_names_as_variables() {
         let (query, variables) = build_query("o", "r", &["feature/x", "evil\") { }"]);
         assert!(query.contains("$b0: String!, $b1: String!"));
-        assert!(query.contains("r1: pullRequests(headRefName: $b1, states: MERGED"));
+        assert!(query.contains("m1: pullRequests(headRefName: $b1, states: MERGED, first: 20)"));
+        assert!(query.contains("c1: pullRequests(headRefName: $b1, states: CLOSED, first: 20)"));
         assert!(!query.contains("evil"));
         assert_eq!(variables["owner"], "o");
         assert_eq!(variables["name"], "r");
@@ -160,14 +169,25 @@ mod tests {
     #[test]
     fn response_maps_aliases_back_to_branches() {
         let data = json!({"repository": {
-            "r0": {"nodes": [{"headRefOid": "aaa"}, {"headRefOid": "bbb"}]},
-            "r1": {"nodes": []},
+            "m0": {"nodes": [{"headRefOid": "aaa", "state": "MERGED"}]},
+            "c0": {"nodes": [{"headRefOid": "bbb", "state": "CLOSED"}, {"headRefOid": "ccc", "state": "OPEN"}]},
+            "m1": {"nodes": []},
+            "c1": {"nodes": []},
         }});
         let found = parse_response(&data, &["x", "y"]).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(
             found["x"],
-            HashSet::from(["aaa".to_string(), "bbb".to_string()])
+            HashSet::from([
+                RequestHead {
+                    sha: "aaa".into(),
+                    state: RequestState::Merged
+                },
+                RequestHead {
+                    sha: "bbb".into(),
+                    state: RequestState::Closed
+                },
+            ])
         );
     }
 

@@ -127,7 +127,7 @@ pub struct Config {
     /// How many read-only git probes may run at once during analysis.
     /// `None` means use the CPU count.
     pub jobs: Option<u32>,
-    /// Whether to ask the forge about merged pull/merge requests first.
+    /// Whether to ask the forge about merged or closed pull/merge requests first.
     /// `None` means off.
     pub forge: Option<ForgeSetting>,
     /// Explicit destination repositories; absent means infer from protection.
@@ -624,7 +624,7 @@ fn forge_question(detections: &[forge::Detection]) -> String {
     };
     format!(
         "{scope}: {pairs}. Ask the selected destination repositories which pull/merge requests \
-         were merged, before checking git? (defaults to protected branches' tracking remotes; \
+         were merged or closed, before checking git? (defaults to protected branches' tracking remotes; \
          networked: branch names are sent to the forge)"
     )
 }

@@ -13,7 +13,7 @@ use anyhow::{Result, anyhow};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 
 use crate::config::Config;
-use crate::forge::{ForgeOutcome, ForgeSource};
+use crate::forge::{ForgeOutcome, ForgeSource, RequestState};
 use crate::git::Git;
 use crate::parallel;
 
@@ -171,13 +171,15 @@ impl serde::Serialize for Effort {
 /// scan (and its spinner) has finished.
 #[derive(Debug, Default)]
 pub struct Merged {
-    /// Branches detected as merged into a protected target.
+    /// Cleanup candidates: Git-merged branches or matching finished requests.
     pub candidates: Vec<String>,
     /// The subset of `candidates` settled by the forge, whose pull/merge
     /// request is recorded as merged. Empty unless the forge is enabled.
     pub pr_merged: HashSet<String>,
+    /// The subset settled by a closed-without-merging request at the branch tip.
+    pub pr_closed: HashSet<String>,
     /// Whether the forge gave a usable answer for this scan. When it did, only
-    /// `pr_merged` branches are trusted as merged by default; otherwise (no
+    /// `pr_merged` and `pr_closed` branches are preselected; otherwise (no
     /// forge, outage, unsupported remote) git alone judged.
     pub forge_answered: bool,
     /// One message per distinct merge-detection failure.
@@ -191,7 +193,7 @@ pub struct Merged {
 /// deleted) as `feature/x` but must be compared as `origin/feature/x`.
 type Candidate = (String, String);
 
-/// Ask the forge which of `pool` were merged, and record those as detected.
+/// Ask the forge which of `pool` have finished requests, and record those as detected.
 ///
 /// This runs before every git strategy: when the forge answers, it is the
 /// authority, and the expensive strategies are then spared those branches
@@ -214,16 +216,22 @@ fn forge_pass(
         return;
     }
 
-    let mut resolved: HashSet<String> = HashSet::new();
+    let mut resolved: HashMap<String, RequestState> = HashMap::new();
     let mut unsupported: Vec<String> = Vec::new();
     let mut answered = false;
 
     for remote in remotes {
-        match forge.pr_merged(remote, tips) {
+        match forge.finished_requests(remote, tips) {
             ForgeOutcome::Resolved(branches) => {
                 answered = true;
                 found.forge_answered = true;
-                resolved.extend(branches);
+                for (branch, state) in branches {
+                    // Repository order must not decide whether a matching merge wins.
+                    resolved
+                        .entry(branch)
+                        .and_modify(|old| *old = (*old).max(state))
+                        .or_insert(state);
+                }
             }
             ForgeOutcome::Unsupported(reason) => unsupported.push(reason),
             ForgeOutcome::Unavailable(error) => {
@@ -246,9 +254,18 @@ fn forge_pass(
 
     // Pool order, not set order: the candidate list must not depend on hashing.
     for (name, _) in pool {
-        if resolved.contains(name) && seen.insert(name.clone()) {
+        if let Some(state) = resolved.get(name)
+            && seen.insert(name.clone())
+        {
             found.candidates.push(name.clone());
-            found.pr_merged.insert(name.clone());
+            match state {
+                RequestState::Merged => {
+                    found.pr_merged.insert(name.clone());
+                }
+                RequestState::Closed => {
+                    found.pr_closed.insert(name.clone());
+                }
+            }
         }
     }
 }
@@ -2054,7 +2071,7 @@ mod tests {
             &self.remotes
         }
 
-        fn pr_merged(&self, remote: &str, tips: &HashMap<String, String>) -> ForgeOutcome {
+        fn finished_requests(&self, remote: &str, tips: &HashMap<String, String>) -> ForgeOutcome {
             let mut names: Vec<String> = tips.keys().cloned().collect();
             names.sort();
             self.asked.lock().unwrap().push((remote.to_string(), names));
@@ -2064,7 +2081,7 @@ mod tests {
             ForgeOutcome::Resolved(
                 tips.iter()
                     .filter(|(b, sha)| self.merged_at.get(*b) == Some(*sha))
-                    .map(|(b, _)| b.clone())
+                    .map(|(b, _)| (b.clone(), RequestState::Merged))
                     .collect(),
             )
         }

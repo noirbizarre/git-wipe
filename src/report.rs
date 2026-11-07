@@ -78,6 +78,9 @@ pub enum BranchReason {
     /// detection runs first.
     #[serde(rename = "pr-merged")]
     PrMerged,
+    /// The forge reports a closed-unmerged request ending at the branch tip.
+    #[serde(rename = "pr-closed")]
+    PrClosed,
 }
 
 /// Whether a worktree was tied to a candidate branch or orphaned.
@@ -171,10 +174,12 @@ pub struct PulledBranch {
 pub struct LocalPhase {
     /// `--remote-only` was used.
     pub skipped: bool,
-    /// Branches detected as merged into a target.
+    /// Cleanup candidates detected by Git or a finished forge request.
     pub merged: Vec<String>,
     /// The subset of `merged` the forge reported (`reason: "pr-merged"`).
     pub pr_merged: Vec<String>,
+    /// The subset of `merged` with a closed-unmerged request (`reason: "pr-closed"`).
+    pub pr_closed: Vec<String>,
     /// Branches whose upstream was deleted.
     pub gone: Vec<String>,
     pub branches: Vec<LocalBranch>,
@@ -235,14 +240,16 @@ pub struct StaleLock {
     pub action: StaleLockAction,
 }
 
-/// Phase 4: merged branches on each configured remote.
+/// Phase 4: cleanup candidates on each configured remote.
 #[derive(Debug, Serialize)]
 pub struct RemoteReport {
     pub remote: String,
-    /// Merged branches detected on this remote.
+    /// Cleanup candidates detected by Git or a finished forge request on this remote.
     pub merged: Vec<String>,
     /// The subset of `merged` the forge reported (`reason: "pr-merged"`).
     pub pr_merged: Vec<String>,
+    /// The subset of `merged` with a closed-unmerged request (`reason: "pr-closed"`).
+    pub pr_closed: Vec<String>,
     pub branches: Vec<RemoteBranch>,
 }
 
@@ -393,6 +400,9 @@ pub enum StatusFlag {
     /// The forge reports its pull/merge request as merged.
     #[serde(rename = "pr-merged")]
     PrMerged,
+    /// The forge reports its pull/merge request as closed without merging.
+    #[serde(rename = "pr-closed")]
+    PrClosed,
     /// Configured upstream no longer exists.
     Gone,
     /// Working tree has no uncommitted change.
@@ -588,6 +598,14 @@ mod tests {
 
     #[test]
     fn pr_merged_is_distinct_in_json() {
+        assert_eq!(
+            serde_json::to_value(BranchReason::PrClosed).unwrap(),
+            "pr-closed"
+        );
+        assert_eq!(
+            serde_json::to_value(StatusFlag::PrClosed).unwrap(),
+            "pr-closed"
+        );
         let value = serde_json::to_value(BranchReason::PrMerged).unwrap();
         assert_eq!(value, "pr-merged");
         let value = serde_json::to_value(StatusFlag::PrMerged).unwrap();

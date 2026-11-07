@@ -75,7 +75,7 @@ pub struct CleanerOptions {
     pub use_worktrunk: bool,
     /// How thorough merge detection should be.
     pub effort: Effort,
-    /// Whether the forge is asked about merged pull/merge requests first.
+    /// Whether the forge is asked about merged or closed pull/merge requests first.
     pub forge: ForgeSetting,
     /// Effective explicit destinations, independent of remotes being cleaned.
     pub forge_repos: Option<Vec<String>>,
@@ -97,7 +97,7 @@ pub struct CleanerOptions {
 /// Whether a local branch is pre-checked in the interactive prompt.
 ///
 /// With a forge verdict (`forge_decided`), the forge is the authority: only
-/// `pr-merged` branches are checked, and whatever git alone found (merged or
+/// `pr-merged` and `pr-closed` branches are checked, and whatever git alone found (merged or
 /// deleted upstream) is listed unchecked. Without one, git's findings are
 /// trusted, a deleted upstream included (the usual footprint of a merged pull
 /// request), except when the branch's worktree holds uncommitted changes.
@@ -113,16 +113,17 @@ fn default_selected(forge_decided: bool, is_pr: bool, dirty_worktree: bool) -> b
 
 /// Pre-checked state of each merged remote branch in the interactive prompt.
 ///
-/// With a forge verdict only `pr-merged` branches are checked; otherwise every
+/// With a forge verdict only finished-request branches are checked; otherwise every
 /// detected branch is.
 fn remote_defaults(
     merged: &[String],
     pr_merged: &HashSet<String>,
+    pr_closed: &HashSet<String>,
     forge_decided: bool,
 ) -> Vec<bool> {
     merged
         .iter()
-        .map(|b| !forge_decided || pr_merged.contains(b))
+        .map(|b| !forge_decided || pr_merged.contains(b) || pr_closed.contains(b))
         .collect()
 }
 
@@ -140,7 +141,7 @@ fn local_prompt(has_branches: bool, has_orphans: bool, forge_decided: bool) -> S
         "Select branches to delete".to_string()
     };
     if forge_decided && has_branches {
-        prompt.push_str(" (only pr-merged branches are pre-selected)");
+        prompt.push_str(" (only pr-merged/pr-closed branches are pre-selected)");
     }
     prompt
 }
@@ -383,6 +384,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             warn(ui, &mut report, warning);
         }
         let pr_merged = merged.pr_merged;
+        let pr_closed = merged.pr_closed;
         let forge_decided = merged.forge_answered;
         let merged = merged.candidates;
 
@@ -413,6 +415,11 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             .cloned()
             .collect();
         report.local.gone = gone.clone();
+        report.local.pr_closed = merged
+            .iter()
+            .filter(|b| pr_closed.contains(*b))
+            .cloned()
+            .collect();
 
         // Everything the user may act on, in display order: content-merged
         // branches first, deleted-upstream ones after.
@@ -585,7 +592,14 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             for branch in &candidates {
                 values.push(format!("branch:{branch}"));
                 let is_gone = gone_set.contains(branch);
-                let is_pr = pr_merged.contains(branch);
+                let pr_label = if pr_merged.contains(branch) {
+                    Some("pr-merged")
+                } else if pr_closed.contains(branch) {
+                    Some("pr-closed")
+                } else {
+                    None
+                };
+                let is_pr = pr_label.is_some();
                 let has_actionable_wt = wt_map
                     .get(branch)
                     .is_some_and(|wt| worktree_guard(wt, &young, &small).is_none());
@@ -594,8 +608,8 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     labels.push(format!("{branch} ({})", tilde_path(&wt.path)));
                     let mut hint = if is_gone {
                         "upstream gone + worktree".to_string()
-                    } else if is_pr {
-                        "pr-merged + worktree".to_string()
+                    } else if let Some(label) = pr_label {
+                        format!("{label} + worktree")
                     } else {
                         "branch + worktree".to_string()
                     };
@@ -607,8 +621,8 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     labels.push(branch.clone());
                     hints.push(if is_gone {
                         "upstream gone".to_string()
-                    } else if is_pr {
-                        "pr-merged".to_string()
+                    } else if let Some(label) = pr_label {
+                        label.to_string()
                     } else {
                         String::new()
                     });
@@ -1106,6 +1120,8 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     BranchReason::Gone
                 } else if pr_merged.contains(branch) {
                     BranchReason::PrMerged
+                } else if pr_closed.contains(branch) {
+                    BranchReason::PrClosed
                 } else {
                     BranchReason::Merged
                 },
@@ -1136,6 +1152,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 warn(ui, &mut report, warning);
             }
             let pr_merged = merged.pr_merged;
+            let pr_closed = merged.pr_closed;
             let forge_decided = merged.forge_answered;
             let merged = merged.candidates;
 
@@ -1145,6 +1162,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     remote: remote.clone(),
                     merged: Vec::new(),
                     pr_merged: Vec::new(),
+                    pr_closed: Vec::new(),
                     branches: Vec::new(),
                 });
                 continue;
@@ -1153,6 +1171,8 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             let reason_of = |branch: &String| {
                 if pr_merged.contains(branch) {
                     BranchReason::PrMerged
+                } else if pr_closed.contains(branch) {
+                    BranchReason::PrClosed
                 } else {
                     BranchReason::Merged
                 }
@@ -1161,6 +1181,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 .iter()
                 .map(|b| match reason_of(b) {
                     BranchReason::PrMerged => format!("{remote}/{b} (pr-merged)"),
+                    BranchReason::PrClosed => format!("{remote}/{b} (pr-closed)"),
                     _ => format!("{remote}/{b}"),
                 })
                 .collect();
@@ -1173,7 +1194,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             let to_delete = if opts.yes {
                 merged.clone()
             } else {
-                let defaults = remote_defaults(&merged, &pr_merged, forge_decided);
+                let defaults = remote_defaults(&merged, &pr_merged, &pr_closed, forge_decided);
                 ui.multi_select(
                     "Select branches to delete",
                     &merged,
@@ -1234,6 +1255,11 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 pr_merged: merged
                     .iter()
                     .filter(|b| pr_merged.contains(*b))
+                    .cloned()
+                    .collect(),
+                pr_closed: merged
+                    .iter()
+                    .filter(|b| pr_closed.contains(*b))
                     .cloned()
                     .collect(),
                 merged,
@@ -1763,21 +1789,28 @@ mod tests {
         );
         assert_eq!(
             local_prompt(true, false, true),
-            "Select branches to delete (only pr-merged branches are pre-selected)"
+            "Select branches to delete (only pr-merged/pr-closed branches are pre-selected)"
         );
     }
 
     #[test]
-    fn remote_defaults_check_only_pr_merged_branches_with_a_forge_verdict() {
-        let merged: Vec<String> = ["a", "b"].map(String::from).to_vec();
+    fn remote_defaults_check_merged_and_closed_requests_with_a_forge_verdict() {
+        let merged: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
         let pr_merged: HashSet<String> = HashSet::from(["b".to_string()]);
+        let pr_closed: HashSet<String> = HashSet::from(["c".to_string()]);
 
-        assert_eq!(remote_defaults(&merged, &pr_merged, false), [true, true]);
-        assert_eq!(remote_defaults(&merged, &pr_merged, true), [false, true]);
+        assert_eq!(
+            remote_defaults(&merged, &pr_merged, &pr_closed, false),
+            [true, true, true]
+        );
+        assert_eq!(
+            remote_defaults(&merged, &pr_merged, &pr_closed, true),
+            [false, true, true]
+        );
     }
 
     #[test]
-    fn with_a_forge_verdict_only_pr_merged_branches_are_preselected() {
+    fn with_a_forge_verdict_only_finished_request_branches_are_preselected() {
         assert!(default_selected(true, true, false));
         assert!(default_selected(true, true, true));
         assert!(!default_selected(true, false, false));

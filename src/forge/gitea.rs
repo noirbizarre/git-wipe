@@ -2,14 +2,18 @@
 //!
 //! Neither offers GraphQL, nor a pull-request filter by head branch, so the
 //! closed pull requests are listed newest-activity first, page by page, until
-//! every branch asked about has been seen or the page budget is spent.
+//! the list ends or the page budget is spent. Reused branch names may have
+//! several heads, so seeing a name once is not enough to stop searching.
 
 use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
 use super::http;
-use super::{Forge, ForgeError, ForgeKind, RemoteUrl, token_from_env};
+use super::{
+    FinishedHeads, Forge, ForgeError, ForgeKind, RemoteUrl, RequestHead, RequestState,
+    token_from_env,
+};
 
 const PAGE_SIZE: usize = 50;
 
@@ -54,14 +58,11 @@ impl Forge for Gitea {
 
     /// Public repositories answer anonymously; a token widens that to private
     /// ones.
-    fn merged_heads(
-        &self,
-        branches: &[&str],
-    ) -> Result<HashMap<String, HashSet<String>>, ForgeError> {
+    fn finished_heads(&self, branches: &[&str]) -> Result<FinishedHeads, ForgeError> {
         let authorization =
             token_from_env(&["GITEA_TOKEN", "FORGEJO_TOKEN"]).map(|token| format!("token {token}"));
         let wanted: HashSet<&str> = branches.iter().copied().collect();
-        let mut found: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut found = HashMap::new();
 
         for page in 1..=MAX_PAGES {
             let body =
@@ -70,10 +71,10 @@ impl Forge for Gitea {
                 .as_array()
                 .ok_or_else(|| ForgeError::other("the pull request list was not an array"))?;
 
-            collect_merged(pulls, &wanted, &mut found);
+            collect_finished(pulls, &wanted, &mut found);
 
-            let seen_all = wanted.iter().all(|b| found.contains_key(*b));
-            if pulls.len() < PAGE_SIZE || seen_all {
+            // Older pages may contain another head or stronger merged evidence for a branch.
+            if pulls.len() < PAGE_SIZE {
                 break;
             }
         }
@@ -81,16 +82,17 @@ impl Forge for Gitea {
     }
 }
 
-/// Keep the merged pull requests whose head branch is in `wanted`.
-fn collect_merged(
-    pulls: &[Value],
-    wanted: &HashSet<&str>,
-    found: &mut HashMap<String, HashSet<String>>,
-) {
+/// Keep finished pull requests whose head branch is in `wanted`.
+fn collect_finished(pulls: &[Value], wanted: &HashSet<&str>, found: &mut FinishedHeads) {
     for pull in pulls {
-        if pull.get("merged").and_then(Value::as_bool) != Some(true) {
-            continue;
-        }
+        let state = match (
+            pull.get("merged").and_then(Value::as_bool),
+            pull.get("state").and_then(Value::as_str),
+        ) {
+            (Some(true), Some("closed")) => RequestState::Merged,
+            (Some(false), Some("closed")) => RequestState::Closed,
+            _ => continue,
+        };
         let head = pull.get("head");
         let branch = head.and_then(|h| h.get("ref")).and_then(Value::as_str);
         let sha = head.and_then(|h| h.get("sha")).and_then(Value::as_str);
@@ -100,7 +102,10 @@ fn collect_merged(
             found
                 .entry(branch.to_string())
                 .or_default()
-                .insert(sha.to_string());
+                .insert(RequestHead {
+                    sha: sha.to_string(),
+                    state,
+                });
         }
     }
 }
@@ -111,18 +116,31 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn keeps_only_merged_pulls_of_wanted_branches() {
+    fn keeps_only_finished_pulls_of_wanted_branches() {
         let pulls = vec![
-            json!({"merged": true, "head": {"ref": "a", "sha": "111"}}),
-            json!({"merged": false, "head": {"ref": "a", "sha": "222"}}),
-            json!({"merged": true, "head": {"ref": "other", "sha": "333"}}),
-            json!({"merged": true, "head": {"ref": "b"}}),
+            json!({"merged": true, "state": "closed", "head": {"ref": "a", "sha": "111"}}),
+            json!({"merged": false, "state": "closed", "head": {"ref": "a", "sha": "222"}}),
+            json!({"merged": false, "state": "open", "head": {"ref": "a", "sha": "555"}}),
+            json!({"merged": true, "state": "closed", "head": {"ref": "other", "sha": "333"}}),
+            json!({"merged": true, "state": "closed", "head": {"ref": "b"}}),
             json!({"head": {"ref": "b", "sha": "444"}}),
         ];
         let wanted = HashSet::from(["a", "b"]);
         let mut found = HashMap::new();
-        collect_merged(&pulls, &wanted, &mut found);
+        collect_finished(&pulls, &wanted, &mut found);
         assert_eq!(found.len(), 1);
-        assert_eq!(found["a"], HashSet::from(["111".to_string()]));
+        assert_eq!(
+            found["a"],
+            HashSet::from([
+                RequestHead {
+                    sha: "111".into(),
+                    state: RequestState::Merged
+                },
+                RequestHead {
+                    sha: "222".into(),
+                    state: RequestState::Closed
+                },
+            ])
+        );
     }
 }
