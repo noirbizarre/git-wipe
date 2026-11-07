@@ -10,6 +10,8 @@
 //! work lives in [`cleaner`] (workflow), [`branches`] and [`worktrees`]
 //! (detection), [`config`] (settings), [`git`] (git access) and [`ui`]
 //! (output).
+//! These runtime modules belong to the binary; the companion library currently
+//! retains template scaffolding rather than exporting the cleanup engine.
 
 mod branches;
 mod cleaner;
