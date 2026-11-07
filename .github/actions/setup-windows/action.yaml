@@ -1,5 +1,5 @@
 name: Set up Windows builds
-description: Configure Defender, ReFS build storage, and cache archiving for Windows CI
+description: Configure Defender, ReFS build and temporary storage, and cache archiving for Windows CI
 
 runs:
   using: composite
@@ -26,6 +26,12 @@ runs:
         # A subdirectory keeps protected volume metadata out of cache pruning.
         $target = New-Item -ItemType Directory -Path "$env:DEV_DRIVE/target" -ErrorAction Stop
         New-Item -ItemType Junction -Path "$env:GITHUB_WORKSPACE/target" -Target $target.FullName -ErrorAction Stop
+        # All subsequent tools need fast temporary storage outside the cached target tree.
+        $temp = New-Item -ItemType Directory -Path "$env:DEV_DRIVE/test-temp" -ErrorAction Stop
+        # FullName gives native Windows paths to Rust, Git and other child processes in every shell.
+        foreach ($name in @('TMP', 'TEMP', 'TMPDIR')) {
+          "$name=$($temp.FullName)" >> $env:GITHUB_ENV
+        }
         # Subsequent steps and cache post hooks must archive contents and preserve the junction on restore.
         $tarOptions = "$env:TAR_OPTIONS --dereference --keep-directory-symlink".Trim()
         "TAR_OPTIONS=$tarOptions" >> $env:GITHUB_ENV

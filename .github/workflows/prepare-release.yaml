@@ -1,3 +1,4 @@
+
 name: 🚀 Prepare Release
 
 on:
@@ -16,23 +17,17 @@ on:
         type: boolean
         default: false
 
-# Every API call in this workflow — the push, and git-cliff's metadata reads —
-# authenticates as the GitHub App, whose installation permissions apply instead
-# of these. These cover `actions/checkout` alone, which only reads.
+# Write access, when needed by the workflow token, is scoped to the prepare job.
 permissions:
   contents: read
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
-    # Well below the App installation token's one-hour lifetime: a job that
-    # outlives its own token fails at whichever `gh` call lands after the
-    # deadline, which is a confusing way to learn a build hung.
+    # Keep preparation bounded, including below an App token's one-hour lifetime.
     timeout-minutes: 30
 
-    # APP_CLIENT_ID and APP_PRIVATE_KEY live only in the `release` environment,
-    # and an environment variable resolves only in a job that declares one —
-    # which is why this key is load-bearing for authentication, not just gating.
+    # Release credentials live in this environment.
     # Preparing a release is not a deployment, so this gates secrets and reviews
     # without registering one. The deployment is publish-release.
     environment:
@@ -55,18 +50,15 @@ jobs:
           # the last tag, and a shallow clone has neither.
           fetch-depth: 0
           fetch-tags: true
-          # The default GITHUB_TOKEN cannot trigger workflows, so a Release PR
-          # it authors would show no CI results.
           token: ${{ steps.app-token.outputs.token }}
 
       - uses: dtolnay/rust-toolchain@stable
 
       # git-cliff is pinned by mise.lock: a changelog tool that changes
       # version between releases would silently change our release notes.
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
         with:
           cache: true
-
       # Use the published extension to sign the next release's commit.
       - name: Install gh-ship
         run: gh extension install noirbizarre/gh-ship
@@ -84,11 +76,7 @@ jobs:
         # before the job starts. It does not degrade gracefully: git-cliff
         # parses the rate-limit error as a commit list and panics.
         #
-        # The App installation token is used rather than `secrets.GITHUB_TOKEN`
-        # because it carries the higher limit — 5000/hour against 1000/hour per
-        # repository — and the App is already authorised for everything read
-        # here. Set per step, not at job level: a step output is not resolvable
-        # in `jobs.<id>.env`.
+        # Set per step: an App token is a step output, unavailable in job env.
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -157,9 +145,7 @@ jobs:
         run: |
           set -euo pipefail
           # Git refuses to commit without an identity, and a runner has none.
-          # Which identity barely matters: `gh ship sign`, next, re-creates this
-          # commit through the API, and the re-created one takes its author
-          # from the token and its committer from GitHub.
+          # App mode re-creates this commit through the API to sign it below.
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -167,7 +153,6 @@ jobs:
           git diff --cached --quiet || \
             git commit -m "chore(release): $VERSION"
           git push origin HEAD
-
       # A commit created on the runner is never signed, whichever token pushes
       # it: signing needs a key, and there is no key here. GitHub *will* sign a
       # commit it creates itself for a bot, but only when the request carries
