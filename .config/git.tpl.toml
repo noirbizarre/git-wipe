@@ -26,7 +26,10 @@ homebrew = true
 homebrew_tap = "noirbizarre/homebrew-tap"
 keywords = "git,branches,worktree,cleanup,merged"
 kind = "library-and-binary"
-logos = []
+logos = [
+    "wordmark",
+    "icon",
+]
 man_pages = true
 mbx = false
 msrv = true
