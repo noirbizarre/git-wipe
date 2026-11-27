@@ -1,77 +1,45 @@
 # Toolchain and task definitions.
 #
-# Tool versions are resolved to exact builds in `mise.lock`, which is
-# committed. CI installs from these two files, so local runs and CI runs
-# use identical tool versions — CI drives the tools directly rather than
-# through the tasks defined below.
+# Tool versions are resolved to exact builds in `mise.lock`, which is committed.
+# CI installs from these two files, so local runs and CI runs use identical tool versions.
 #
 # Tools no CI job needs are declared on their own task rather than in `[tools]`,
-# because `mise install` — what CI runs — installs `[tools]` only. It matters:
-# cargo-binstall has no prebuilt artifact for some cargo tools, so a global
-# entry would make every CI job compile them from source.
-#
-# Rust itself is intentionally not managed here: CI needs per-job components
-# (rustfmt, clippy, llvm-tools-preview) and cross-compilation targets, which
-# `dtolnay/rust-toolchain` handles better. `rust-toolchain.toml` pins the
-# channel for both.
-
+# because `mise install` — what CI runs — installs `[tools]` only.
+# It matters as cargo-binstall has no prebuilt artifact for some cargo tools,
+# so a global entry would make every CI job compile them from source.
 [settings]
-# Resolve tools through mise.lock and keep it updated. Without this, the
-# lockfile is ignored and `latest` really means latest.
+# Resolve tools through mise.lock and keep it updated.
 lockfile = true
 
-# Do not let mise adopt `rust-toolchain.toml`. Rust is installed by rustup
-# locally and by `dtolnay/rust-toolchain` in CI, which handle per-job
-# components and cross-compilation targets that mise does not. Leaving both
-# in charge would have mise shadow the toolchain CI just installed.
+# Do not let mise adopt `rust-toolchain.toml`.
+# Rust is installed by rustup locally and by `dtolnay/rust-toolchain` in CI,
+# which handle per-job components and cross-compilation targets that mise does not.
+# Leaving both in charge would have mise shadow the toolchain CI just installed.
 idiomatic_version_file_enable_tools = []
 
 [tools]
 actionlint = "latest"
-# actionlint silently skips its shellcheck integration when the binary is
-# absent, so without this a local run is NOT the CI run. Runners ship it.
-#
-# The aqua backend is named explicitly: left as a bare `shellcheck` it resolves
-# to `asdf:shellcheck`, which carries no lockfile URLs, and `mise install
-# --locked` — what mise-action runs as soon as a mise.lock exists — fails on it.
-"aqua:koalaman/shellcheck" = "latest"
+# actionlint silently skips its shellcheck integration when the binary is absent
+# Keep the explicit key aligned with mise.lock so CI's locked installs can resolve it.
+shellcheck = "latest"
 prek = "latest"
 typos = "latest"
 git-cliff = "latest"
 cargo-binstall = "latest"
 "cargo:cargo-nextest" = "latest"
 "cargo:cargo-llvm-cov" = "latest"
-# The template this project is rendered from. `cargo:` rather than `github:` or `ubi:`, which both
-# install it fine and write no lockfile URLs — and `mise install --locked`,
-# which mise-action runs as soon as a mise.lock exists, then fails on the entry
-# it cannot verify. The same trap as `shellcheck` above, from the other
-# direction: there the fix was naming a backend that locks, here it is naming
-# one that needs no URL to.
-#
-# It is not a source build. git-tpl ships binstall metadata, so with
-# cargo-binstall present this downloads a release archive — about three seconds
-# against several minutes to compile a crate that vendors libgit2.
-#
-# `latest` follows mise's minimum release age when resolving updates; mise.lock
-# records the exact selected build so local and CI installations agree.
 "cargo:git-tpl" = "latest"
-# cargo-insta is declared on the task that uses it instead of here — see the
-# note in the header.
+
+# --- begin project-specific tools ---
+# Add project-wide tools here; tools needed by only one task belong on that task.
+# --- end project-specific tools ---
 
 [hooks]
-# prek.toml declares both pre-commit and commit-msg as default hook types.
-postinstall = "prek install"
+postinstall = [
+  "prek install"
+]
 
 # --- Everyday ---------------------------------------------------------------
-#
-# `mise <task>` is shorthand for `mise tasks run <task>`, and a builtin
-# subcommand of the same name wins it silently — `mise fmt` formats mise.toml
-# rather than running cargo fmt, and says nothing about the task it shadowed.
-# `run` and `fmt` are both builtins, which is why these are `cli` and `format`.
-#
-# mise may claim further names in future releases, so `check:tasks` in the
-# template repository fails the render when it does.
-
 [tasks.default]
 description = "Run format, lint, build and test"
 depends = ["format", "lint", "lint:actions", "lint:md", "build", "test"]
@@ -79,6 +47,20 @@ depends = ["format", "lint", "lint:actions", "lint:md", "build", "test"]
 [tasks.build]
 description = "Build the project"
 run = "cargo build"
+sources = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain.toml",
+  "mise.lock",
+  ".cargo/config",
+  ".cargo/config.toml",
+  "build.rs",
+  "src/**",
+]
+outputs = [
+  'target/debug/git-wipe{% if os() == "windows" %}.exe{% endif %}',
+  "target/debug/libgit_wipe.rlib",
+]
 
 [tasks.test]
 description = "Run tests (accepts nextest selectors)"
@@ -107,22 +89,21 @@ run = "typos"
 
 [tasks."lint:actions"]
 description = "Lint the GitHub Actions workflows"
-# Suppressions live in .github/actionlint.yml rather than as flags here, so
-# this task and the prek hook cannot drift apart.
+# Suppressions live in .github/actionlint.yml rather than as flags here,
+# so this task and the prek hook cannot drift apart.
 run = "actionlint .github/workflows/*.yaml"
 
 [tasks."lint:md"]
-description = "Lint the documentation Markdown"
+description = "Lint all project Markdown"
 # Install the native binary only for this task; keep its version aligned with
 # the rumdl pre-commit hook in prek.toml.
 tools = { rumdl = "0.3.2" }
-#
-# Scoped to the same files as the prek hook, minus CHANGELOG.md, which is
-# git-cliff's output, not prose to wrap.
-run = 'rumdl check "AGENTS.md" "CONTRIBUTING.md" "README.md"'
+# The shared rumdl config excludes the generated root CHANGELOG.md.
+run = "rumdl check ."
 
 [tasks.snapshots]
 description = "Review and update insta snapshots interactively"
+# cargo-insta is declared here as only used once by this task
 tools = { "cargo:cargo-insta" = "latest" }
 run = "cargo insta review"
 
@@ -138,8 +119,6 @@ depends = ["check"]
 
 [tasks.cli]
 description = "Run git-wipe from source"
-# `raw_args` so flags reach the binary rather than mise: `mise cli --help`
-# prints the binary's help, not the task's.
 raw_args = true
 run = "cargo run --bin git-wipe --"
 
@@ -202,62 +181,41 @@ run = "gh ship validate"
 
 # --- Template ---------------------------------------------------------------
 #
-# This project is rendered from rust.tpl. `git tpl update` advances
-# refs/tpl/<id> and touches nothing else — not HEAD, not the index, not the
-# worktree — so running it is always safe and never a decision. The changes
-# arrive only when you merge:
+# This project is rendered from https://github.com/noirbizarre/rust.tpl
+# To update it:
 #
-#   mise run tpl:check       # has it moved?
-#   mise run tpl:update      # bring the rendered ref up to date
-#   mise run tpl:diff        # read what merging it would change
-#   git tpl merge            # take it
-#
-# git-tpl is in [tools] above, so `mise install` is all these tasks need.
-# It used to be excluded because it vendored libgit2 and had no prebuilt
-# artifact, which would have made every CI job compile it; since 0.4.0 it ships
-# release archives and mise installs them directly.
+#   mise tpl:check       # has it moved?
+#   mise tpl:update      # bring the rendered ref up to date
+#   mise tpl:diff        # read what merging it would change
+#   mise tpl:merge       # take it
 
 [tasks."tpl:update"]
-description = "Re-render the template into refs/tpl/<id> (leaves the worktree alone)"
-# `raw_args` so `--ref`, `--dirty` and `--answer` reach git-tpl.
+description = "Advance refs/tpl/<id>; may save migrated answers without merging rendered files"
 raw_args = true
 run = "git tpl update"
 
 [tasks."tpl:diff"]
 description = "Show what merging the template would change"
-# `raw_args` so `--stat`, `--name-only` and path limiting reach git-tpl.
 raw_args = true
 run = "git tpl diff"
 
+[tasks."tpl:merge"]
+description = "Merge the last updated rendered files"
+raw_args = true
+run = "git tpl merge"
+
 [tasks."tpl:check"]
 description = "Has the template moved? Exits 1 if merging it would change anything"
-# `update` first, because the rendered ref may not exist at all: a fresh clone
-# has no `refs/tpl/*` — `git clone` and `actions/checkout` fetch neither — and
-# `update` creates it rather than failing, so this works anywhere.
-#
-# `--exit-code` reports *difference*, never conflict. A preview that would
-# conflict is a correct answer to the question asked, and failing on it would
-# make this useless on exactly the projects that have diverged most.
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-git tpl update
-git tpl diff --exit-code --stat
-"""
+run = [
+  "git tpl update",
+  "git tpl diff --exit-code --stat",
+]
 
 # --- project-specific tasks --------------------------------------------------
 #
-# Add your own tasks below this line. The template owns everything above it and
-# will keep updating it; everything here is yours, and Git's 3-way merge
-# preserves it across `git tpl update`.
-#
-# Open any multi-line `run` block with `#!/usr/bin/env bash`. Without one mise
-# runs it through `sh`, which is dash on a GitHub runner — `set -o pipefail`
-# errors there and `< <(...)` is a syntax error — while `/bin/sh` is often bash
-# locally. The difference does not show up until CI.
-#
-# Artwork tasks belong here rather than in `default` or `check`: they rewrite
-# committed binaries, so a routine run would dirty the working tree every time.
+# Add your own tasks below this line and global tools between the tools markers.
+# Group related project tasks here; the template owns the sections above.
+# Git's 3-way merge preserves project additions across template merges.
 
 # --- Artwork ----------------------------------------------------------------
 #

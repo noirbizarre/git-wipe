@@ -1,5 +1,12 @@
 default_install_hook_types = ["pre-commit", "commit-msg"]
 
+# Generators own these bytes; hooks must not rewrite release output or lockfiles.
+exclude = { glob = [
+  "CHANGELOG.md",
+  "Cargo.lock",
+  "mise.lock",
+] }
+
 [[repos]]
 repo = "builtin"
 hooks = [
@@ -8,67 +15,48 @@ hooks = [
   { id = "check-toml" },
   { id = "check-yaml" },
   { id = "check-json" },
-  # Rust files are excluded because `cargo fmt` below already owns their final
-  # newline, and two hooks rewriting the same bytes is how a pre-commit run
-  # ends up needing a second pre-commit run.
+  # Rust files are excluded because `cargo fmt` below already owns their final newline
   { id = "end-of-file-fixer", exclude_types = ["rust"] },
   { id = "mixed-line-ending" },
-  # Snapshots and fixtures record output verbatim, trailing whitespace
-  # included. Trimming it here would fail the tests that assert it.
-  { id = "trailing-whitespace", exclude = "^tests/(snapshots/.*\\.snap|fixtures/.*)$" },
+  { id = "trailing-whitespace" },
 ]
 
 [[repos]]
 repo = "https://github.com/commitizen-tools/commitizen"
 rev = "v4.19.3"
-
 [[repos.hooks]]
 id = "commitizen"
 stages = ["commit-msg"]
 additional_dependencies = ["emotional==0.6.1"]
 
-# actionlint publishes its own hook manifest, so this uses that instead of
-# hand-rolling a `repo = "local"` block: version bumps are then visible to
-# `prek update` the same way the Commitizen hook above already is, and
-# `name`/`entry`/`files` come from the manifest — nothing to override. mise
-# is a requirement to work on this project at all, so its shims already put
-# the pinned `actionlint` on PATH; the `actionlint-system` hook's bare
-# `entry = "actionlint"` finds it without help.
-#
-# Keep `rev` in step with `tools.actionlint` in mise.lock: nothing enforces
-# the two agree.
-#
-# Suppressions are configured in .github/actionlint.yml, not here: the same
-# file serves `mise run lint:actions`, so the two cannot disagree.
 [[repos]]
 repo = "https://github.com/rhysd/actionlint"
 rev = "v1.7.12"
 hooks = [{ id = "actionlint-system" }]
 
-# Checks Markdown style, including the 120-column prose limit. Scoped to the
-# project-authored docs, not CHANGELOG.md — that one is git-cliff's output,
-# not prose to wrap.
 [[repos]]
 repo = "https://github.com/rvben/rumdl-pre-commit"
 rev = "v0.3.2"
-
-[[repos.hooks]]
-id = "rumdl-check"
-files = "^(AGENTS\\.md|CONTRIBUTING\\.md|README\\.md)$"
+hooks = [
+  { id = "rumdl-fmt" },
+  { id = "rumdl-check" },
+]
 
 [[repos]]
 repo = "https://github.com/crate-ci/typos"
 rev = "v1.47.1"
+hooks = [
+  { id = "typos" },
+  # Check the message before it enters release history; do not rewrite it.
+  # Wait for https://github.com/crate-ci/typos/pull/1605 to avoid false positive on commit/rebase
+  # { id = "typos", alias = "typos-commit-msg", args = ["--force-exclude"], stages = ["commit-msg"]},
+]
 
-[[repos.hooks]]
-id = "typos"
-
-# Check the message before it enters release history; do not rewrite it.
-[[repos.hooks]]
-id = "typos"
-alias = "typos-commit-msg"
-args = ["--force-exclude"]
-stages = ["commit-msg"]
+[[repos]]
+repo = "https://github.com/editorconfig-checker/editorconfig-checker"
+rev = "v4.0.2"
+# rumdl and rustfmt understand prose and embedded Rust strings; generic indentation checks do not.
+hooks = [{ id = "editorconfig-checker", exclude_types = ["markdown", "rust"] }]
 
 [[repos]]
 repo = "local"
@@ -83,17 +71,6 @@ pass_filenames = false
 
 # --- project-specific hooks --------------------------------------------------
 #
-# Add architecture guards and other project-only hooks below this line. The
-# template owns everything above it and will keep updating it; everything here
-# is yours, and Git's 3-way merge preserves it across `git tpl update`.
-#
-# The pattern these projects use is a grep that fails the commit when a
-# dependency escapes the module that is supposed to contain it:
-#
-#   [[repos.hooks]]
-#   id = "http-isolation"
-#   name = "the HTTP client is confined to the data layer"
-#   language = "system"
-#   entry = "bash -c '! grep -rnP --include=*.rs \"(?<![A-Za-z0-9_])ureq::\" src | grep -v \"^src/data/\"'"
-#   files = "\\.rs$"
-#   pass_filenames = false
+# Add architecture guards and other project-only hooks below this line.
+# The template owns everything above it and will keep updating it.
+# Everything here is yours, and Git's 3-way merge preserves it across `git tpl update`.

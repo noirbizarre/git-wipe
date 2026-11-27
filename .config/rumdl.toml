@@ -1,4 +1,6 @@
 [global]
+# git-cliff owns this file; nested project changelogs are still checked.
+exclude = ["./CHANGELOG.md"]
 disable = [
   # Allow raw HTML in the README's centered hero and badges.
   # https://rumdl.dev/md033/
@@ -23,5 +25,4 @@ code-blocks = false
 #
 # Add per-project rule exceptions below this line, with a one-line description
 # followed by the rule's documentation link. Keep the default checks enabled.
-# The template owns everything above; `git tpl update` never touches this file
-# below the marker.
+# The template owns everything above; Git's 3-way merge preserves project additions.

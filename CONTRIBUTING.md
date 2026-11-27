@@ -41,6 +41,16 @@ optional comprehensive check.
 
 ## Tasks
 
+`mise build` uses source/output freshness checks to avoid starting Cargo when
+nothing changed. Cargo handles incremental compilation whenever the task runs.
+The default tracks `src/`, `build.rs`, the manifests, toolchain and Cargo config,
+and checks the debug binary and library outputs.
+Extend `tasks.build.sources` for external path dependencies or build assets.
+Adjust its outputs for custom target directories or compilation targets.
+After changing environment-only inputs such as `RUSTFLAGS` or `RUSTUP_TOOLCHAIN`,
+use `mise run --force build`. Use `mise exec -- cargo build` directly for one-off
+profile/target options.
+
 | Command | What it does |
 |---|---|
 | `mise build` | Build the project |
@@ -49,9 +59,10 @@ optional comprehensive check.
 | `mise test` | Run the tests (accepts nextest selectors) |
 | `mise cover` | Run the tests with coverage |
 | `mise format` | Format |
+| `mise format:check` | Check formatting without rewriting |
 | `mise lint` | Clippy, warnings denied |
 | `mise lint:actions` | actionlint over the workflows |
-| `mise lint:md` | rumdl over AGENTS.md, CONTRIBUTING.md, README.md |
+| `mise lint:md` | Check all project Markdown except the generated root CHANGELOG.md |
 | `mise spell` | typos |
 | `mise snapshots` | Review pending insta snapshots |
 | `mise check` | Everything that does not modify the working tree |
@@ -60,6 +71,8 @@ optional comprehensive check.
 | `mise release` | Show the version the next release would take |
 | `mise tpl:update` | Bring the rendered template ref up to date |
 | `mise tpl:diff` | Show what merging the template would change |
+| `mise tpl:merge` | Merge the updated rendered template |
+| `mise tpl:check` | Update the template ref and report whether merging would change files |
 
 `mise <task>` is a shorthand for `mise run <task>`, but a builtin subcommand of
 the same name wins it silently — which is why the format task is `format` and
@@ -102,9 +115,19 @@ remain authoring conventions. The type selects the changelog section, and a `!`
 or a `BREAKING CHANGE:` footer drives the version bump — so the message is part
 of the release, not paperwork around it.
 
-The official typos hooks check source files on `pre-commit` and commit messages
-on `commit-msg`. Message spelling is checked without rewriting the message, so
-fix any reported errors before retrying the commit.
+The pre-commit hooks format and check project Markdown with rumdl and validate
+EditorConfig settings. The generated root `CHANGELOG.md` is excluded because
+git-cliff owns it. Run `mise lint:md` for a non-rewriting Markdown check.
+Rumdl owns Markdown list indentation and the 120-column prose limit, with tables
+and code blocks exempt from line wrapping.
+Markdown and Rust keep their EditorConfig editor defaults but are excluded from the generic EditorConfig hook;
+rumdl and `cargo fmt` own their syntax-aware formatting checks, including prose and embedded strings.
+Other file types are checked by the EditorConfig hook.
+
+The official typos hook checks source files on `pre-commit`. Commit-message
+spelling checks are temporarily disabled pending
+[the upstream commit/rebase fix](https://github.com/crate-ci/typos/pull/1605).
+Commitizen still validates commit messages on `commit-msg`.
 
 ## Releases
 
@@ -163,20 +186,23 @@ The toolchain, hooks, CI and release workflows come from
 [rust.tpl](https://github.com/noirbizarre/rust.tpl):
 
 ```bash
-git tpl status         # is there a template update pending?
-mise tpl:update    # advance refs/tpl/<id> — HEAD, index and worktree untouched
+git tpl status     # is there a template update pending?
+mise tpl:update    # advance refs/tpl/<id>; may save migrated answers
 mise tpl:diff      # read what merging it would change
-git tpl merge          # take it
+mise tpl:merge     # take it
 ```
 
-`tpl:update` is safe to run at any time: it only advances the rendered ref.
-Nothing reaches your branch until the merge.
+`tpl:update` advances the rendered ref without merging rendered files or changing
+HEAD or the index. It may save migrated answers in `.config/git.tpl.toml` as an
+unstaged edit. `tpl:check` runs update first and has the same migration behavior.
+Rendered changes reach your branch when you merge.
 
 `mise install` provides git-tpl through the declared `cargo:` tool. With
 cargo-binstall available, mise downloads its release archive rather than
 compiling the libgit2 dependency from source.
 
 Files carrying template-owned content — `mise.toml`, `prek.toml`, `Cargo.toml` —
-end with a `# --- project-specific ---` marker. Add below it; Git's 3-way merge
+have project-specific section markers. Add below them, or put global mise
+tools between the begin/end project-specific tools markers. Git's 3-way merge
 then preserves your additions across updates. A fix that belongs to every
 project belongs in the template, not here.

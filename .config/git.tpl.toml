@@ -12,7 +12,10 @@ aur = true
 aur_package_name = "git-wipe-bin"
 author = "Axel H. <noirbizarre@gmail.com>"
 bin_name = "git-wipe"
-categories = "command-line-utilities,development-tools"
+categories = [
+    "command-line-utilities",
+    "development-tools",
+]
 copyright_holder = "Axel H."
 copyright_year = 2026
 crate = "git-wipe"
@@ -23,6 +26,10 @@ homebrew = true
 homebrew_tap = "noirbizarre/homebrew-tap"
 keywords = "git,branches,worktree,cleanup,merged"
 kind = "library-and-binary"
+logos = [
+    "wordmark",
+    "icon",
+]
 man_pages = true
 mbx = false
 msrv = true
