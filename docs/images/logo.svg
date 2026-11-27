@@ -1,0 +1,10 @@
+<!--
+  Placeholder wordmark for the README and documentation landing page.
+  Replace it with your own artwork. Keep a wide viewBox; use icon.svg or icon.png
+  for the compact documentation header and favicon when an icon is selected.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 296 80" role="img" aria-label="git-wipe">
+  <rect x="8" y="8" width="64" height="64" rx="14" fill="#64748b" opacity="0.2"/>
+  <circle cx="40" cy="40" r="14" fill="none" stroke="#64748b" stroke-width="4"/>
+  <text x="88" y="54" font-family="monospace" font-size="42" fill="#64748b">git-wipe</text>
+</svg>
