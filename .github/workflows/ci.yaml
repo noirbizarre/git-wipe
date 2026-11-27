@@ -18,6 +18,7 @@ defaults:
 
 env:
   CARGO_TERM_COLOR: always
+  MISE_NO_HOOKS: "1"
   RUST_BACKTRACE: full
 
   # sccache caches individual objects, so a Cargo.lock bump doesn't force a full rebuild the way rust-cache's key does.
@@ -130,16 +131,18 @@ jobs:
         run: ./.github/actions/setup-windows/verify.ps1
 
       - name: Run tests (with coverage)
-        run: |
-          # --no-report also disables automatic cleaning: discard cached workspace artifacts
-          # and profiles explicitly so earlier runs cannot contaminate this run's coverage.
-          cargo llvm-cov clean --workspace
-          cargo llvm-cov nextest --profile ci --no-report
-          cargo llvm-cov report --lcov --output-path lcov.info
+        env:
+          # %m signatures can collide; %b separates builds, but LLVM cannot read build IDs on macOS.
+          LLVM_PROFILE_FILE_NAME: ${{ runner.os == 'macOS' && '%m.profraw' || '%m-%b.profraw' }}
+          # %b requires a build ID in each instrumented binary; Darwin keeps its native linker settings.
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C link-arg=/build-id' || runner.os == 'Linux' && '-C link-arg=-Wl,--build-id=sha1' || '' }}
+        run: cargo llvm-cov nextest --profile ci --lcov --output-path lcov.info
 
-      # Keep raw inputs even when a corrupt profile prevents generating lcov.info.
+      # Debug runs need raw inputs even when a corrupt profile prevents generating lcov.info.
       - name: Upload coverage artifacts
-        if: always()
+        if: ${{ always() && runner.debug == '1' }}
+        # Diagnostic upload failures must not fail tests or block Codecov uploads.
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.os.flag }}-${{ github.run_attempt }}
@@ -178,7 +181,11 @@ jobs:
       - name: Read the MSRV from Cargo.toml
         id: msrv
         run: |
-          version=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          # A root package's explicit version wins; an inherited version comes from the workspace.
+          version="$(yq -p toml -o yaml -er '
+            ((.package."rust-version" | select(tag == "!!str")) // .workspace.package."rust-version") |
+            select(tag == "!!str" and . != "")
+          ' Cargo.toml)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@master

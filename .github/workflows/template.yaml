@@ -25,6 +25,9 @@ concurrency:
   group: template
   cancel-in-progress: false
 
+env:
+  MISE_NO_HOOKS: "1"
+
 jobs:
   drift:
     name: 🔄 Drift
@@ -43,8 +46,10 @@ jobs:
       # it when there is none, so re-rendering from scratch is the whole job —
       # no ref has to have been pushed for this to work.
       #
-      # Nothing is written that outlives the runner: `update` touches the ref,
-      # never HEAD, the index or the worktree.
+      # `update` advances the ref and may save migrated answers in
+      # .config/git.tpl.toml, but leaves HEAD, the index and rendered files alone.
+      # These changes remain local to this disposable runner; applying rendered
+      # files in a developer checkout still requires an explicit merge.
       - name: Re-render the template
         run: git tpl update
 

@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/images/icon.svg" alt="git-wipe" width="160">
-</p>
-
 <h1 align="center">git-wipe</h1>
 
 <p align="center"><strong>Wipe out merged local branches and worktrees</strong></p>

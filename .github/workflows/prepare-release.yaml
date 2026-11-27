@@ -21,6 +21,9 @@ on:
 permissions:
   contents: read
 
+env:
+  MISE_NO_HOOKS: "1"
+
 jobs:
   prepare:
     runs-on: ubuntu-latest
@@ -49,7 +52,6 @@ jobs:
           # Full history *and* tags: git-cliff derives the next version from
           # the last tag, and a shallow clone has neither.
           fetch-depth: 0
-          fetch-tags: true
           token: ${{ steps.app-token.outputs.token }}
 
       - uses: dtolnay/rust-toolchain@stable
