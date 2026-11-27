@@ -190,8 +190,9 @@ pub struct Cli {
     /// Output a single JSON document to stdout (implies --yes)
     ///
     /// Human-readable output is suppressed: stdout carries the document alone.
-    /// The document is pretty-printed on a terminal and compact when piped or
-    /// redirected.
+    /// The document is pretty-printed with supported terminal colors and compact
+    /// and uncolored when piped or redirected. NO_COLOR or --no-color disables
+    /// colors without changing the layout.
     ///
     /// Global so it can be given before or after a subcommand
     /// (`git wipe config list --json`).

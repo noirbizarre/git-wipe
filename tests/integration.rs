@@ -16,6 +16,143 @@ use common::{
 
 // ── CLI basics ───────────────────────────────────────────────────────
 
+// Unix PTYs preserve stream bytes; ConPTY adds its own screen-control styling,
+// which cannot establish whether JSON itself emitted ANSI under --no-color.
+#[cfg(unix)]
+fn json_in_terminal(dir: &std::path::Path, args: &[&str], env: &[(&str, &str)]) -> (bool, String) {
+    use std::io::Read;
+
+    let pair = portable_pty::native_pty_system()
+        .openpty(portable_pty::PtySize::default())
+        .unwrap();
+    let mut command = portable_pty::CommandBuilder::new(assert_cmd::cargo::cargo_bin!("git-wipe"));
+    command.cwd(dir);
+    command.args(args);
+    // Each child owns its color policy, independent of the developer's shell
+    // and console's process-wide capability cache.
+    for key in ["NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE"] {
+        command.env_remove(key);
+    }
+    command.env("TERM", "xterm-256color");
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let mut reader = pair.master.try_clone_reader().unwrap();
+    let mut child = pair.slave.spawn_command(command).unwrap();
+    // Keeping a slave open in the parent would prevent EOF after child exit.
+    drop(pair.slave);
+    let mut output = String::new();
+    // Drain before waiting so a full PTY buffer cannot block child termination.
+    reader.read_to_string(&mut output).unwrap();
+    let success = child.wait().unwrap().success();
+    (success, output.replace("\r\n", "\n"))
+}
+
+#[test]
+#[cfg(unix)]
+fn terminal_json_is_pretty_and_respects_color_overrides() {
+    let dir = init_repo();
+    for (args, env, colored) in [
+        (
+            vec!["config", "list", "--json"],
+            vec![("FORCE_COLOR", "1")],
+            true,
+        ),
+        (
+            vec!["config", "list", "--json"],
+            vec![("NO_COLOR", "1"), ("FORCE_COLOR", "1")],
+            false,
+        ),
+        (
+            vec!["config", "list", "--json"],
+            vec![("NO_COLOR", ""), ("FORCE_COLOR", "1")],
+            false,
+        ),
+        (
+            vec!["config", "list", "--json", "--no-color"],
+            vec![("FORCE_COLOR", "1")],
+            false,
+        ),
+        (
+            vec!["config", "list", "--json"],
+            vec![("TERM", "dumb")],
+            false,
+        ),
+        (vec!["config", "list", "--json"], vec![], true),
+    ] {
+        let (success, output) = json_in_terminal(dir.path(), &args, &env);
+        assert!(success, "{output}");
+        assert_eq!(
+            output.contains('\x1b'),
+            colored,
+            "{args:?}, {env:?}: {output:?}"
+        );
+        let plain = console::strip_ansi_codes(&output);
+        let value: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        assert!(value.is_object());
+        assert!(plain.starts_with("{\n  \""), "{plain}");
+        assert!(plain.ends_with("\n}\n"), "{plain:?}");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn fatal_terminal_json_respects_the_explicit_color_override() {
+    let dir = TempDir::new().unwrap();
+    for no_color in [false, true] {
+        let mut args = vec!["status", "--json"];
+        if no_color {
+            args.push("--no-color");
+        }
+        let (success, output) = json_in_terminal(dir.path(), &args, &[("FORCE_COLOR", "1")]);
+        assert!(!success);
+        assert_eq!(output.contains('\x1b'), !no_color);
+        let plain = console::strip_ansi_codes(&output);
+        let value: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        assert_eq!(value["status"], "error");
+        assert!(plain.starts_with("{\n  \""), "{plain}");
+        assert!(plain.ends_with("\n}\n"), "{plain:?}");
+    }
+}
+
+#[test]
+fn piped_and_redirected_json_stay_compact_even_with_forced_colors() {
+    let dir = init_repo();
+    let mut expected = None;
+    for redirected in [false, true] {
+        let mut command = StdCommand::new(assert_cmd::cargo::cargo_bin!("git-wipe"));
+        command
+            .current_dir(dir.path())
+            .args(["config", "set", "worktrunk", "false", "--json"])
+            .env_remove("NO_COLOR")
+            .env("FORCE_COLOR", "1")
+            .env("CLICOLOR_FORCE", "1");
+        let file = tempfile::tempfile().unwrap();
+        if redirected {
+            command.stdout(file.try_clone().unwrap());
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        let bytes = if redirected {
+            use std::io::{Read, Seek};
+            let mut file = file;
+            file.rewind().unwrap();
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).unwrap();
+            bytes
+        } else {
+            output.stdout
+        };
+        assert_eq!(bytes, b"{\"status\":\"success\",\"action\":\"set\",\"target\":\"worktrunk\",\"value\":\"false\"}\n");
+        assert!(!bytes.contains(&0x1b));
+        if let Some(expected) = &expected {
+            assert_eq!(&bytes, expected);
+        }
+        expected = Some(bytes);
+    }
+}
+
 #[test]
 fn dirty_orphan_worktrees_require_force_in_unattended_runs() {
     for json in [false, true] {
