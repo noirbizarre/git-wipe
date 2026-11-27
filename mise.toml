@@ -20,6 +20,7 @@ idiomatic_version_file_enable_tools = []
 [tools]
 actionlint = "latest"
 # actionlint silently skips its shellcheck integration when the binary is absent
+# Keep the explicit key aligned with mise.lock so CI's locked installs can resolve it.
 shellcheck = "latest"
 prek = "latest"
 typos = "latest"
