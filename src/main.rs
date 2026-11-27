@@ -77,7 +77,9 @@ fn main() -> ExitCode {
     let json = cli.json;
     // Retain command identity so fatal responses use the invoked schema.
     let result = match &cli.command {
-        Some(Command::Config { action }) => handle_config_command(&git, &ui, json, action.clone()),
+        Some(Command::Config { action }) => {
+            handle_config_command(&git, &ui, json, cli.no_color, action.clone())
+        }
         Some(Command::Status { merged }) => handle_status(&git, &ui, &cli, *merged),
         None => handle_clean(&git, &ui, &cli),
     };
@@ -118,7 +120,8 @@ fn fail(ui: &ui::Ui, cli: &Cli, git: &git::Git, err: &anyhow::Error) {
 /// Printing the document is itself best-effort: a broken pipe here must not
 /// mask the error we are already reporting through the exit code.
 fn emit_fatal_json(cli: &Cli, git: &git::Git, err: &anyhow::Error) {
-    let _ = fatal_document(cli, git, err).and_then(|document| report::print_json(&document));
+    let _ = fatal_document(cli, git, err)
+        .and_then(|document| report::print_json(&document, cli.no_color));
 }
 
 fn fatal_document(cli: &Cli, git: &git::Git, err: &anyhow::Error) -> Result<serde_json::Value> {
@@ -241,6 +244,7 @@ fn handle_config_command(
     git: &git::Git,
     ui: &ui::Ui,
     json: bool,
+    no_color: bool,
     action: ConfigAction,
 ) -> Result<()> {
     // Capture response metadata before dispatch consumes the argument strings.
@@ -248,7 +252,7 @@ fn handle_config_command(
     let result: Result<()> = match action {
         ConfigAction::List => {
             if json {
-                return list_config_json(git);
+                return list_config_json(git, no_color);
             }
             match config::Config::try_load(git)? {
                 Some(cfg) => {
@@ -484,7 +488,7 @@ fn handle_config_command(
     };
     result?;
     if json && let Some(response) = response {
-        report::print_json(&response)?;
+        report::print_json(&response, no_color)?;
     }
     Ok(())
 }
@@ -521,7 +525,7 @@ fn config_mutation_report(action: &ConfigAction) -> Option<report::ConfigMutatio
 ///
 /// Unlike the text output, an unconfigured repository is not an error: the
 /// document simply reports `configured: false` with empty values.
-fn list_config_json(git: &git::Git) -> Result<()> {
+fn list_config_json(git: &git::Git, no_color: bool) -> Result<()> {
     let cfg = config::Config::try_load(git)?;
     let report = report::ConfigReport {
         configured: cfg.is_some(),
@@ -541,7 +545,7 @@ fn list_config_json(git: &git::Git) -> Result<()> {
         forge: cfg.as_ref().and_then(|c| c.forge),
         forge_repos: cfg.as_ref().and_then(|c| c.forge_repos.clone()),
     };
-    report::print_json(&report)
+    report::print_json(&report, no_color)
 }
 
 /// `git wipe status`: a read-only inventory, never a setup wizard.
@@ -582,7 +586,7 @@ fn handle_status(git: &git::Git, ui: &ui::Ui, cli: &Cli, merged_only: bool) -> R
     let rows = status::filter_rows(scan.rows, opts);
 
     if cli.json {
-        return report::print_json(&status::to_report(&rows, scan.warnings));
+        return report::print_json(&status::to_report(&rows, scan.warnings), cli.no_color);
     }
     status::render(ui, &rows, total > 0);
     Ok(())
@@ -636,7 +640,7 @@ fn handle_clean(git: &git::Git, ui: &ui::Ui, cli: &Cli) -> Result<()> {
     let report = cleaner::run(git, &cfg, ui, &opts)?;
 
     if cli.json {
-        report::print_json(&report)?;
+        report::print_json(&report, cli.no_color)?;
     }
 
     Ok(())
@@ -950,7 +954,7 @@ mod tests {
     #[test]
     fn list_config_json_reports_an_unconfigured_repository() -> Result<()> {
         let (_dir, git) = test_helpers::init_repo()?;
-        list_config_json(&git)
+        list_config_json(&git, false)
     }
 
     #[test]
@@ -962,7 +966,7 @@ mod tests {
             ..config::Config::default()
         }
         .save(&git)?;
-        list_config_json(&git)
+        list_config_json(&git, false)
     }
 
     #[test]

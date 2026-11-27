@@ -265,8 +265,9 @@ disables ANSI styling in every command.
 
 `--json` prints a single JSON document describing everything that was detected
 and done. Human-readable logs are suppressed; stdout carries the document alone,
-so it is safe to pipe. The document is pretty-printed on a terminal and compact
-when piped or redirected.
+so it is safe to pipe. The document is pretty-printed with colors on supported
+terminals and compact and uncolored when piped or redirected. `NO_COLOR` or
+`--no-color` disables colors without changing the layout.
 
 ```sh
 git wipe --json | jq '.summary'

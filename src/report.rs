@@ -4,7 +4,7 @@
 //! stdout and emits a single JSON document per run. The shape is versioned
 //! ([`Report::VERSION`]) so consumers can detect breaking changes.
 
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::Result;
@@ -18,16 +18,20 @@ use crate::size::Size;
 
 /// Serialize `value` to stdout as a single JSON document.
 ///
-/// Pretty-printed on a terminal (a human is reading it) and compact otherwise
+/// Pretty-printed with supported colors on a terminal and compact otherwise
 /// (a pipe or a file, where one line per document is friendlier to consumers).
 /// A trailing newline is always written.
-pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
+pub fn print_json<T: Serialize>(value: &T, no_color: bool) -> Result<()> {
+    // Stdout's reentrant lock keeps the document and its terminator together
+    // even though the shared renderer also locks stdout internally.
     let mut out = io::stdout().lock();
-    if out.is_terminal() {
-        serde_json::to_writer_pretty(&mut out, value)?;
+    let options = if no_color {
+        // The explicit CLI override must also win over FORCE_COLOR.
+        console_json::JsonOptions::default().color(console_json::ColorMode::Never)
     } else {
-        serde_json::to_writer(&mut out, value)?;
-    }
+        console_json::JsonOptions::default()
+    };
+    console_json::write_json_stdout_with_options(value, options)?;
     out.write_all(b"\n")?;
     out.flush()?;
     Ok(())
@@ -554,25 +558,56 @@ mod tests {
     }
 
     #[test]
+    fn json_serialization_failures_keep_their_original_source() {
+        struct Fails;
+
+        impl Serialize for Fails {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                _: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom(
+                    "deliberate serialization failure",
+                ))
+            }
+        }
+
+        let error = print_json(&Fails, true).unwrap_err();
+        let source = error
+            .chain()
+            .find_map(|source| source.downcast_ref::<serde_json::Error>())
+            .unwrap();
+        assert!(source.is_data());
+        assert_eq!(source.to_string(), "deliberate serialization failure");
+    }
+
+    #[test]
     fn print_json_writes_a_document_to_stdout() {
         // stdout is captured by the test harness and is not a terminal here,
         // so this exercises the compact branch.
-        print_json(&Report::new(true, Effort::default(), MinAge::default(), 1)).unwrap();
-        print_json(&ConfigReport {
-            configured: false,
-            protected: Vec::new(),
-            ignore: Vec::new(),
-            remotes: None,
-            branch_protected: Vec::new(),
-            branch_ignored: Vec::new(),
-            worktrunk: None,
-            forge: None,
-            forge_repos: None,
-            effort: None,
-            min_age: None,
-            min_size: None,
-            jobs: None,
-        })
+        print_json(
+            &Report::new(true, Effort::default(), MinAge::default(), 1),
+            false,
+        )
+        .unwrap();
+        print_json(
+            &ConfigReport {
+                configured: false,
+                protected: Vec::new(),
+                ignore: Vec::new(),
+                remotes: None,
+                branch_protected: Vec::new(),
+                branch_ignored: Vec::new(),
+                worktrunk: None,
+                forge: None,
+                forge_repos: None,
+                effort: None,
+                min_age: None,
+                min_size: None,
+                jobs: None,
+            },
+            false,
+        )
         .unwrap();
     }
 

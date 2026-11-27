@@ -97,6 +97,7 @@ strip = true
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
+console-json = "0.1.1"
 demand = "2"
 globset = "0.4"
 serde = { version = "1", features = ["derive"] }
@@ -128,3 +129,7 @@ serde = "1"
 assert_cmd = "2"
 predicates = "3"
 serde_json = "1"
+
+[target.'cfg(unix)'.dev-dependencies]
+# ConPTY rewrites the screen instead of preserving the emitted JSON bytes.
+portable-pty = "0.9"
