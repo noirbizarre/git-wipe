@@ -15,6 +15,9 @@ indent_size = 2
 
 [*.md]
 indent_size = 2
-# The one line-width convention `mise run lint:md` enforces mechanically —
-# surfaced here too, as a ruler in editors that honor max_line_length.
+# Editor defaults; rumdl enforces syntax-aware indentation and prose wrapping.
 max_line_length = 120
+
+[PKGBUILD]
+# Arch packaging uses tabs for shell function bodies.
+indent_style = tab
