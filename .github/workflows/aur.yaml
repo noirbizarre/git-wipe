@@ -100,8 +100,7 @@ jobs:
               # .SRCINFO must carry a checksum for every declared `arch`.
               x86_64=$(download "git-wipe_${TAG}_linux-amd64.tar.gz")
               aarch64=$(download "git-wipe_${TAG}_linux-arm64.tar.gz")
-              sed -i -e "s/@SHA256_X86_64@/${x86_64}/" \
-                     -e "s/@SHA256_AARCH64@/${aarch64}/" build/PKGBUILD
+              sed -i -e "s/@SHA256_X86_64@/${x86_64}/" -e "s/@SHA256_AARCH64@/${aarch64}/" build/PKGBUILD
               ;;
           esac
 
