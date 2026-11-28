@@ -1695,7 +1695,7 @@ fn pull_updates_current_branch() {
         .current_dir(&work_path)
         .assert()
         .success()
-        .stderr(predicate::str::contains("Pulling"));
+        .stderr(predicate::str::contains("Pulled"));
 
     let after = git_rev_parse(&work_path, "HEAD");
     assert_ne!(before, after, "main should have been fast-forwarded");
@@ -1727,6 +1727,55 @@ fn no_pull_skips_fast_forward() {
         before, after,
         "main should NOT have been updated with --no-pull"
     );
+}
+
+#[test]
+fn redirected_progress_emits_each_final_result_once_and_json_stays_quiet() {
+    let (_dir, work_path, _bare_path) = init_repo_with_remote();
+    for extra in [vec![], vec!["--verbose"], vec!["--json"]] {
+        let output = Command::cargo_bin("git-wipe")
+            .unwrap()
+            .args(["-y", "--local-only", "--no-worktrunk", "--no-color"])
+            .args(&extra)
+            .current_dir(&work_path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if extra.contains(&"--json") {
+            assert!(
+                output.stderr.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(document["fetch"]["remotes"][0]["status"], "updated");
+            assert_eq!(document["pull"]["branches"][0]["status"], "updated");
+        } else {
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(output.stdout.is_empty());
+            assert!(!stderr.starts_with('\n'), "{stderr}");
+            assert!(!stderr.contains("\n\n"), "{stderr}");
+            assert!(!stderr.contains("Fetching"), "{stderr}");
+            assert!(!stderr.contains("Pulling"), "{stderr}");
+            for line in [
+                "✔ Fetched and pruned 1 remote(s):",
+                "  ✔ origin updated",
+                "✔ Pulled 1 target branch(es):",
+                "  ✔ main updated",
+            ] {
+                assert_eq!(
+                    stderr.lines().filter(|actual| *actual == line).count(),
+                    1,
+                    "{stderr}"
+                );
+            }
+            assert!(!stderr.contains("Remotes updated"), "{stderr}");
+        }
+    }
 }
 
 #[test]
@@ -1813,7 +1862,7 @@ fn pull_updates_branch_in_worktree() {
         .current_dir(&work_path)
         .assert()
         .success()
-        .stderr(predicate::str::contains("Pulling"));
+        .stderr(predicate::str::contains("Pulled"));
 
     let after = git_rev_parse(&work_path, "develop");
     assert_ne!(

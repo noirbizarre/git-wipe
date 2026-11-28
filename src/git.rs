@@ -249,6 +249,11 @@ pub struct Git {
 }
 
 impl Git {
+    /// Live progress must not repaint over verbose command echoes.
+    pub fn is_verbose(&self) -> bool {
+        self.verbose
+    }
+
     /// Create a handle operating in the process's current directory.
     pub fn new(verbose: bool) -> Self {
         Self {

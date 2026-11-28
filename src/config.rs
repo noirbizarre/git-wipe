@@ -18,8 +18,7 @@ pub const SECTION: &str = "wipe";
 
 /// The question asked, by the wizard and at run time alike, before worktrunk
 /// is used for worktree removal.
-pub const WORKTRUNK_PROMPT: &str =
-    "Worktrunk (wt) detected. Use it for worktree removal (triggers pre/post-remove hooks)?";
+pub const WORKTRUNK_PROMPT: &str = "Worktrunk detected: use it for worktree removal?";
 
 /// Split a comma-separated prompt answer into trimmed, non-empty patterns.
 fn parse_patterns(input: &str) -> Vec<String> {
@@ -349,8 +348,6 @@ impl Config {
         } else {
             ui.heading("No configuration found. Let's set up git-wipe.");
         }
-        ui.blank();
-
         // ── Protected branches ───────────────────────────────────────
 
         let branches = git.local_branches()?;
@@ -396,8 +393,6 @@ impl Config {
             ui.muted("  Defaulting to protecting 'main'.");
         }
 
-        ui.blank();
-
         // ── Ignored branches ─────────────────────────────────────────
 
         let ignore_default = existing
@@ -409,8 +404,6 @@ impl Config {
             &ignore_default,
         )?;
         let ignore = parse_patterns(&ignore_input);
-
-        ui.blank();
 
         // ── Remotes ──────────────────────────────────────────────────
 
@@ -431,11 +424,8 @@ impl Config {
             resolve_remotes(selected, &available_remotes, existing.as_ref())
         };
 
-        ui.blank();
-
         // ── Worktrunk integration ────────────────────────────────────
         let worktrunk = if crate::git::worktrunk_available() {
-            ui.blank();
             let default = existing.as_ref().and_then(|c| c.worktrunk).unwrap_or(true);
             let use_wt = ui.confirm(WORKTRUNK_PROMPT, default)?;
             Some(use_wt)
@@ -468,7 +458,6 @@ impl Config {
             forge_repos: existing.as_ref().and_then(|c| c.forge_repos.clone()),
         };
         config.finish_setup(git, ui, persist)?;
-        ui.blank();
 
         Ok(config)
     }
@@ -502,7 +491,6 @@ fn forge_step(git: &Git, ui: &Ui, current: Option<ForgeSetting>) -> Option<Forge
         return current;
     }
 
-    ui.blank();
     let question = forge_question(&detections);
     let confirmed = ui
         .confirm(&question, forge_default(current))
@@ -616,10 +604,7 @@ fn order_like(items: Vec<String>, previous: Option<&[String]>) -> Vec<String> {
     unique
 }
 
-/// The prompt offering forge detection, spelling out which remote is which.
-///
-/// Name every detected pairing so auto-detection is clear, without implying
-/// that all remotes will be queried regardless of destination selection.
+/// Offer forge detection, naming each forge kind once to keep the prompt compact.
 fn forge_question(detections: &[forge::Detection]) -> String {
     let mut kinds: Vec<forge::ForgeKind> = Vec::new();
     for detection in detections {
@@ -628,22 +613,13 @@ fn forge_question(detections: &[forge::Detection]) -> String {
         }
     }
 
-    let pairs = detections
+    let names = kinds
         .iter()
-        .map(|d| format!("{} ({} on {})", d.remote, d.kind.label(), d.host))
+        .map(|kind| kind.label())
         .collect::<Vec<_>>()
         .join(", ");
 
-    let scope = if kinds.len() == 1 {
-        format!("{} detected", kinds[0].label())
-    } else {
-        "Remotes point to different forges".to_string()
-    };
-    format!(
-        "{scope}: {pairs}. Ask the selected destination repositories which pull/merge requests \
-         were merged or closed, before checking git? (defaults to protected branches' tracking remotes; \
-         networked: branch names are sent to the forge)"
-    )
+    format!("{names} detected: query the pull/merge requests status?")
 }
 
 /// Load config, running the interactive setup if needed.
@@ -1206,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn forge_question_names_each_remote_and_its_forge() {
+    fn forge_question_concisely_names_the_detected_forges() {
         use crate::forge::{Detection, ForgeKind};
         let one = [Detection {
             remote: "origin".into(),
@@ -1214,9 +1190,10 @@ mod tests {
             host: "github.com".into(),
         }];
         let question = forge_question(&one);
-        assert!(question.starts_with("GitHub detected"), "{question}");
-        assert!(question.contains("origin (GitHub on github.com)"));
-        assert!(question.contains("networked"));
+        assert_eq!(
+            question,
+            "GitHub detected: query the pull/merge requests status?"
+        );
 
         let two = [
             one[0].clone(),
@@ -1227,9 +1204,10 @@ mod tests {
             },
         ];
         let question = forge_question(&two);
-        assert!(question.contains("different forges"), "{question}");
-        assert!(question.contains("origin (GitHub on github.com)"));
-        assert!(question.contains("mirror (GitLab on gitlab.com)"));
+        assert_eq!(
+            question,
+            "GitHub, GitLab detected: query the pull/merge requests status?"
+        );
     }
 
     fn strings(items: &[&str]) -> Vec<String> {
