@@ -4,8 +4,149 @@
 //! error classification stay consistent. Output methods are best-effort and
 //! swallow I/O errors; prompts propagate them, since they need an answer.
 
+use choisir::{MultiSelect, SearchMode, theme::MinimalTheme};
 use console::{Style, Term};
-use demand::{Confirm, DemandOption, Input, MultiSelect, Spinner, SpinnerStyle};
+use dialoguer::{Confirm, Input, theme::Theme};
+use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
+use std::{collections::HashMap, fmt};
+
+/// Choisir sanitizes labels and puts descriptions on a separate row, so the
+/// theme owns our inline metadata without adding it to the searchable label.
+struct SelectionTheme {
+    base: MinimalTheme,
+    selected_name: Style,
+    path_style: Style,
+    status_style: Style,
+    details: HashMap<String, SelectionDetails>,
+}
+
+struct SelectionDetails {
+    path: String,
+    hint: String,
+    path_only: bool,
+}
+
+/// Search branch names independently of display-only worktree paths.
+fn searchable_label<'a>(value: &'a str, label: &'a str) -> (&'a str, &'a str) {
+    let branch = value.strip_prefix("branch:").unwrap_or(value);
+    match label.strip_prefix(branch) {
+        Some(path) if path.starts_with(" (") => (branch, path),
+        _ => (label, ""),
+    }
+}
+
+impl SelectionTheme {
+    fn new(values: &[String], labels: &[String], hints: &[String]) -> Self {
+        let details = values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| {
+                let (label, path) = searchable_label(value, labels.get(i).unwrap_or(value));
+                let label = clean_prompt_text(label);
+                let path_only = value.starts_with("orphan-wt:")
+                    || label.starts_with('/')
+                    || label.starts_with("~/");
+                let hint = hints
+                    .get(i)
+                    .map(|hint| clean_prompt_text(hint))
+                    .unwrap_or_default();
+                (
+                    label,
+                    SelectionDetails {
+                        path: clean_prompt_text(path),
+                        hint,
+                        path_only,
+                    },
+                )
+            })
+            .collect();
+        Self {
+            base: MinimalTheme {
+                // The wrapper colors label parts; selection must not recolor paths or status.
+                selected_label_style: Style::new(),
+                unselected_label_style: Style::new(),
+                ..Default::default()
+            },
+            selected_name: Style::new().for_stderr().green(),
+            path_style: Style::new().for_stderr().dim(),
+            status_style: Style::new().for_stderr().dim().cyan(),
+            details,
+        }
+    }
+
+    fn label(&self, text: &str, checked: bool) -> String {
+        let plain = console::strip_ansi_codes(text);
+        let details = self.details.get(plain.as_ref());
+        // Preserve chooser-provided highlights on searchable text only.
+        let (name, path) = match details {
+            Some(details) if details.path_only => ("", text),
+            Some(details) => (text, details.path.as_str()),
+            None => (text, ""),
+        };
+        let name = if checked {
+            self.selected_name.apply_to(name).to_string()
+        } else {
+            name.to_owned()
+        };
+        let mut label = format!("{name}{}", self.path_style.apply_to(path));
+        if let Some(details) = details.filter(|details| !details.hint.is_empty()) {
+            label.push_str(&format!(" {}", self.status_style.apply_to(&details.hint)));
+        }
+        label
+    }
+}
+
+fn clean_prompt_text(text: &str) -> String {
+    // Metadata bypasses choisir's description renderer; retain its control sanitization.
+    console::strip_ansi_codes(text)
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+impl Theme for SelectionTheme {
+    fn format_multi_select_prompt(&self, f: &mut dyn fmt::Write, prompt: &str) -> fmt::Result {
+        self.base.format_multi_select_prompt(f, prompt)
+    }
+
+    fn format_multi_select_prompt_selection(
+        &self,
+        f: &mut dyn fmt::Write,
+        prompt: &str,
+        selections: &[&str],
+    ) -> fmt::Result {
+        // Trait hooks do not forward automatically; accepted labels need the same partial styling.
+        let labels: Vec<_> = selections
+            .iter()
+            .map(|text| self.label(text, true))
+            .collect();
+        let refs: Vec<_> = labels.iter().map(String::as_str).collect();
+        self.base
+            .format_multi_select_prompt_selection(f, prompt, &refs)
+    }
+
+    fn format_error(&self, f: &mut dyn fmt::Write, error: &str) -> fmt::Result {
+        self.base.format_error(f, error)
+    }
+
+    fn format_multi_select_prompt_item(
+        &self,
+        f: &mut dyn fmt::Write,
+        text: &str,
+        checked: bool,
+        active: bool,
+    ) -> fmt::Result {
+        self.base
+            .format_multi_select_prompt_item(f, &self.label(text, checked), checked, active)
+    }
+}
+
+/// Keep optional prompt cancellation compatible with the binary's error-chain check.
+fn prompt_answer<T>(answer: Option<T>) -> anyhow::Result<T> {
+    answer.ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::Interrupted, "prompt cancelled").into()
+    })
+}
 
 /// Return a display-friendly path with `$HOME` replaced by `~`.
 ///
@@ -226,21 +367,24 @@ impl Ui {
         if self.quiet {
             return self.prompt_unavailable();
         }
-        Ok(Confirm::new(prompt).selected(default).run()?)
+        prompt_answer(
+            Confirm::with_theme(&MinimalTheme::default())
+                .with_prompt(prompt)
+                .default(default)
+                .interact_on_opt(&self.term)?,
+        )
     }
 
     /// Present a multi-select list. Returns the selected values.
     ///
     /// `values` are the returned items; `labels` are what the user sees;
-    /// `hints` are optional secondary text rendered next to each item
+    /// `hints` are optional dimmed secondary text rendered inline with each item
     /// (pass an empty slice to omit hints).
-    /// The `a` key inverts the whole selection (select all, or deselect all
-    /// when everything is already selected), and demand renders a keymap hint
-    /// in the footer so the shortcut is discoverable.
+    /// Ctrl+A or Home inverts the whole selection, including filtered-out items.
     ///
-    /// `filterable` enables demand's built-in fuzzy filter: pressing `/`
-    /// starts a live fuzzy-matched search over the labels (arrow keys, the
-    /// toggle key and Enter still work while filtering; `Esc` clears it).
+    /// `filterable` enables case-insensitive substring typeahead over branch names
+    /// (or paths for orphan worktrees)
+    /// (arrow keys, Space and Enter still work while filtering; Esc clears it).
     /// Pass `true` for lists that can grow long (branches, worktrees);
     /// `false` keeps the plain list for short, fixed-size ones (remotes).
     pub fn multi_select(
@@ -255,18 +399,29 @@ impl Ui {
         if self.quiet {
             return self.prompt_unavailable();
         }
-        let mut ms = MultiSelect::new(prompt).min(0).filterable(filterable);
+        // Choisir rejects empty lists, but no candidates is a valid empty answer.
+        if values.is_empty() {
+            return Ok(Vec::new());
+        }
+        let theme = SelectionTheme::new(values, labels, hints);
+        let selected: Vec<usize> = (0..values.len())
+            .filter(|&i| defaults.get(i).copied().unwrap_or(false))
+            .collect();
+        let mut ms = MultiSelect::new()
+            .with_theme(&theme)
+            .with_prompt(prompt)
+            .min(0)
+            .search(if filterable {
+                SearchMode::Typeahead
+            } else {
+                SearchMode::Disabled
+            });
         for (i, val) in values.iter().enumerate() {
             let label = labels.get(i).unwrap_or(val);
-            let mut option = DemandOption::new(val.clone())
-                .label(label)
-                .selected(defaults.get(i).copied().unwrap_or(false));
-            if let Some(hint) = hints.get(i).filter(|h| !h.is_empty()) {
-                option = option.description(hint);
-            }
-            ms = ms.option(option);
+            let (search_label, _) = searchable_label(val, label);
+            ms = ms.item(val.clone(), search_label);
         }
-        Ok(ms.run()?)
+        prompt_answer(ms.defaults(&selected).interact_on_opt(&self.term)?)
     }
 
     /// Ask for a text input.
@@ -274,16 +429,19 @@ impl Ui {
         if self.quiet {
             return self.prompt_unavailable();
         }
-        Ok(Input::new(prompt).default_value(default).run()?)
+        Ok(Input::<String>::with_theme(&MinimalTheme::default())
+            .with_prompt(prompt)
+            // Initial text remains editable; a fallback default would prevent clearing it.
+            .with_initial_text(default)
+            .allow_empty(true)
+            .interact_text_on(&self.term)?)
     }
 
     /// Run `op` while showing a spinner labelled `title` on stderr.
     ///
     /// Only renders on a TTY. On non-TTY stderr (pipes, CI, tests) it runs
-    /// `op` directly — no background thread and no Ctrl-C handler installed.
-    /// On a TTY, demand's spinner installs its own Ctrl-C handler that exits
-    /// with code 130; a mid-spinner interrupt therefore does not print
-    /// "Cancelled." (by design — 130 is the conventional SIGINT exit code).
+    /// `op` directly, without a background thread. SIGINT retains the normal
+    /// process behavior rather than installing a progress-specific handler.
     ///
     /// The spinner clears its own line before returning, so callers must
     /// print any success/error line *after* this returns, never inside `op`.
@@ -295,10 +453,15 @@ impl Ui {
         if self.quiet || !self.term.is_term() {
             return op();
         }
-        Spinner::new(title.to_string())
-            .style(&SpinnerStyle::minidots())
-            .run(|_action| op())
-            .expect("spinner render failed on a TTY")
+        let spinner = ProgressBar::new_spinner()
+            .with_style(ProgressStyle::default_spinner())
+            .with_message(title.to_owned())
+            // Drop also clears the display if the operation unwinds.
+            .with_finish(ProgressFinish::AndClear);
+        spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+        let result = op();
+        spinner.finish_and_clear();
+        result
     }
 
     /// Print a summary line: "✔ 1 branch deleted." or "✔ 3 branches deleted."
@@ -474,6 +637,92 @@ mod tests {
             ui.multi_select("pick", &["a".to_string()], &[], &[], &[], true)
                 .is_err()
         );
+        assert!(ui.multi_select("pick", &[], &[], &[], &[], true).is_err());
+    }
+
+    #[test]
+    fn cancelling_an_optional_prompt_is_recognized_as_cancellation() {
+        let error = prompt_answer::<bool>(None)
+            .unwrap_err()
+            .context("confirmation failed");
+        assert!(crate::is_cancelled(&error));
+        assert!(!prompt_answer(Some(false)).unwrap());
+    }
+
+    #[test]
+    fn an_empty_candidate_list_needs_no_terminal() {
+        assert!(
+            Ui::new()
+                .multi_select("pick", &[], &[], &[], &[], true)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn inline_status_is_sanitized_without_becoming_part_of_the_label() {
+        let theme = SelectionTheme::new(
+            &["branch:topic".into()],
+            &["topic (/tmp/topic)".into()],
+            &["pr-merged + worktree\n\x1b[31mextra".into()],
+        );
+        let mut rendered = String::new();
+        theme
+            .format_multi_select_prompt_item(&mut rendered, "topic", true, false)
+            .unwrap();
+        assert_eq!(
+            console::strip_ansi_codes(&rendered),
+            "  ✔ topic (/tmp/topic) pr-merged + worktree extra"
+        );
+    }
+
+    #[test]
+    fn orphan_worktrees_remain_searchable_by_path() {
+        assert_eq!(
+            searchable_label("orphan-wt:/tmp/topic", "/tmp/topic"),
+            ("/tmp/topic", "")
+        );
+    }
+
+    #[test]
+    fn focus_and_selection_leave_path_and_status_styles_unchanged() {
+        let mut theme = SelectionTheme::new(
+            &["branch:topic".into()],
+            &["topic (/tmp/topic)".into()],
+            &["pr-merged + worktree".into()],
+        );
+        // Force individual styles instead of mutating console's process-wide color policy.
+        theme.base.focus_style = theme.base.focus_style.force_styling(true);
+        theme.base.checked_style = theme.base.checked_style.force_styling(true);
+        theme.selected_name = theme.selected_name.force_styling(true);
+        theme.path_style = theme.path_style.force_styling(true);
+        theme.status_style = theme.status_style.force_styling(true);
+        let metadata = format!(
+            "{} {}",
+            theme.path_style.apply_to(" (/tmp/topic)"),
+            theme.status_style.apply_to("pr-merged + worktree")
+        );
+        for checked in [false, true] {
+            for active in [false, true] {
+                let mut row = String::new();
+                theme
+                    .format_multi_select_prompt_item(&mut row, "topic", checked, active)
+                    .unwrap();
+                assert!(row.ends_with(&metadata), "{row:?}");
+                assert_eq!(row.contains("\x1b[32mtopic\x1b[0m"), checked, "{row:?}");
+                assert_eq!(row.contains("\x1b[32m✔\x1b[0m"), checked, "{row:?}");
+                assert_eq!(row.contains("\x1b[33m>\x1b[0m"), active, "{row:?}");
+                if !checked {
+                    assert!(row.contains("⬚ topic"), "{row:?}");
+                }
+            }
+        }
+        let mut summary = String::new();
+        theme
+            .format_multi_select_prompt_selection(&mut summary, "Branches", &["topic"])
+            .unwrap();
+        assert!(summary.contains("\x1b[32mtopic\x1b[0m"), "{summary:?}");
+        assert!(summary.ends_with(&metadata), "{summary:?}");
     }
 
     #[test]

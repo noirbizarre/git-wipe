@@ -136,6 +136,21 @@ relevant file into your shell's completion directory.
 Run `git wipe` with no arguments: it works interactively, showing what it found
 and prompting before every destructive step.
 
+In selection lists, use the arrow keys to navigate, Space to toggle an item,
+and Enter to accept the checked items (including an empty selection). Type
+directly to filter branch names by a case-insensitive substring (or paths for
+orphan worktrees); checked items stay selected when hidden by the search.
+Ctrl+A or Home inverts the entire
+selection, including hidden items. Esc clears a search, or cancels when the search
+is empty; Ctrl+C cancels immediately. A yellow `>` marks the focused row; checked
+branches and checkboxes are green, while unchecked ones use the terminal's default
+color. Paths stay dimmed and status details stay cyan on the same line as each
+branch, regardless of selection. Short remote lists do not enable search.
+
+Confirmation prompts accept `y` or `n`, with Enter accepting the displayed
+default. Setup text fields are pre-filled and editable: erase the text to clear
+an optional pattern list.
+
 ```sh
 # Interactive mode (prompts for confirmation at each step)
 git wipe

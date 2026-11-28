@@ -130,20 +130,15 @@ fn remote_defaults(
 /// The question put to the user for the local branches and worktrees.
 ///
 /// `has_branches` is whether any branch is offered, `has_orphans` whether any
-/// orphan worktree is. With a forge verdict the prompt says why most branches
-/// are unchecked, where the user reads them.
-fn local_prompt(has_branches: bool, has_orphans: bool, forge_decided: bool) -> String {
-    let mut prompt = if has_branches && has_orphans {
-        "Select branches and worktrees to delete".to_string()
+/// orphan worktree is.
+fn local_prompt(has_branches: bool, has_orphans: bool) -> &'static str {
+    if has_branches && has_orphans {
+        "Select branches and worktrees to delete"
     } else if has_orphans {
-        "Select orphan worktrees to remove".to_string()
+        "Select orphan worktrees to remove"
     } else {
-        "Select branches to delete".to_string()
-    };
-    if forge_decided && has_branches {
-        prompt.push_str(" (only pr-merged/pr-closed branches are pre-selected)");
+        "Select branches to delete"
     }
-    prompt
 }
 
 /// The candidate branches whose (actionable) worktree has uncommitted changes.
@@ -678,7 +673,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
             }
             ui.heading(&format!("Found {}:", join_with_and(&found)));
 
-            let prompt = local_prompt(has_merged || has_gone, has_orphans, forge_decided);
+            let prompt = local_prompt(has_merged || has_gone, has_orphans);
 
             let selected = if opts.yes {
                 // Non-interactive: take everything except deleted-upstream
@@ -694,7 +689,7 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     .cloned()
                     .collect()
             } else {
-                ui.multi_select(&prompt, &values, &labels, &defaults, &hints, true)?
+                ui.multi_select(prompt, &values, &labels, &defaults, &hints, true)?
             };
 
             selected_branches = selected
@@ -1868,23 +1863,15 @@ mod tests {
     }
 
     #[test]
-    fn local_prompt_explains_unchecked_branches_only_with_a_forge_verdict() {
+    fn local_prompt_names_only_the_kinds_of_candidates_offered() {
+        assert_eq!(local_prompt(true, false), "Select branches to delete");
         assert_eq!(
-            local_prompt(true, false, false),
-            "Select branches to delete"
-        );
-        assert_eq!(
-            local_prompt(true, true, false),
+            local_prompt(true, true),
             "Select branches and worktrees to delete"
         );
         assert_eq!(
-            local_prompt(false, true, true),
-            "Select orphan worktrees to remove",
-            "no branch is offered, so there is nothing to explain"
-        );
-        assert_eq!(
-            local_prompt(true, false, true),
-            "Select branches to delete (only pr-merged/pr-closed branches are pre-selected)"
+            local_prompt(false, true),
+            "Select orphan worktrees to remove"
         );
     }
 
