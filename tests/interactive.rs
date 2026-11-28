@@ -464,7 +464,7 @@ fn setup_preserves_editable_defaults_and_accepts_empty_patterns() {
         session.expect("Which remotes should merged branches be deleted from?");
         session.send(b"\r");
         // Worktrunk availability is machine-dependent; answer its default if offered.
-        if session.expect_one_of(&["Worktrunk (wt) detected.", "GitHub detected:"]) == 0 {
+        if session.expect_one_of(&["Worktrunk detected:", "GitHub detected:"]) == 0 {
             session.send(b"\r");
             session.expect("GitHub detected:");
         }
