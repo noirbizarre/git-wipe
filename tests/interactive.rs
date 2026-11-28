@@ -13,8 +13,8 @@ use common::{configure, git_branches, init_repo};
 
 struct Session {
     child: Box<dyn Child + Send + Sync>,
-    // Retaining the master keeps the terminal alive while the child is running.
-    _master: Box<dyn MasterPty + Send>,
+    // Retaining the master keeps the terminal alive and exposes input readiness.
+    master: Box<dyn MasterPty + Send>,
     input: Box<dyn Write + Send>,
     output: Receiver<Vec<u8>>,
     transcript: Vec<u8>,
@@ -60,7 +60,7 @@ impl Session {
         });
         Self {
             child,
-            _master: pair.master,
+            master: pair.master,
             input,
             output,
             transcript: Vec::new(),
@@ -110,6 +110,31 @@ impl Session {
     }
 
     fn send(&mut self, keys: &[u8]) {
+        use nix::sys::termios::LocalFlags;
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        // Prompts flush before entering raw mode. Sending editing/control keys
+        // earlier lets the line discipline swallow Backspace or turn Ctrl+C into SIGINT.
+        loop {
+            let flags = self
+                .master
+                .get_termios()
+                .expect("PTY termios must be available")
+                .local_flags;
+            if !flags.intersects(LocalFlags::ICANON | LocalFlags::ECHO | LocalFlags::ISIG) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "prompt did not enter raw mode\n{}",
+                self.text()
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.write_keys(keys);
+    }
+
+    fn write_keys(&mut self, keys: &[u8]) {
         self.input.write_all(keys).unwrap();
         self.input.flush().unwrap();
     }
@@ -666,7 +691,8 @@ fn interrupting_a_spinner_uses_normal_process_signal_handling() {
         screen.contains("Fetching and pruning 1 remote(s):\n  - slow"),
         "{screen}"
     );
-    session.send(b"\x03");
+    // Progress deliberately uses normal signal handling rather than a raw-key reader.
+    session.write_keys(b"\x03");
     let status = session.finish(false);
     assert!(status.signal().is_some(), "{status}: {}", session.text());
     assert!(!session.text().contains("Cancelled."));

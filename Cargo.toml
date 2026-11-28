@@ -133,6 +133,8 @@ predicates = "3"
 serde_json = "1"
 
 [target.'cfg(unix)'.dev-dependencies]
+# Match portable-pty's termios types when waiting for an interactive raw-key reader.
+nix = { version = "0.28", features = ["term"] }
 # ConPTY rewrites the screen instead of preserving the emitted JSON bytes.
 portable-pty = "0.9"
 # Assert the final terminal screen, not the repeated bytes of live progress frames.

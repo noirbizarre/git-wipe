@@ -505,6 +505,7 @@ dependencies = [
  "globset",
  "indicatif",
  "miette",
+ "nix",
  "portable-pty",
  "predicates",
  "rustix",
