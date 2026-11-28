@@ -136,3 +136,5 @@ serde_json = "1"
 [target.'cfg(unix)'.dev-dependencies]
 # ConPTY rewrites the screen instead of preserving the emitted JSON bytes.
 portable-pty = "0.9"
+# Assert the final terminal screen, not the repeated bytes of live progress frames.
+vt100 = "0.18"

@@ -349,8 +349,6 @@ impl Config {
         } else {
             ui.heading("No configuration found. Let's set up git-wipe.");
         }
-        ui.blank();
-
         // ── Protected branches ───────────────────────────────────────
 
         let branches = git.local_branches()?;
@@ -396,8 +394,6 @@ impl Config {
             ui.muted("  Defaulting to protecting 'main'.");
         }
 
-        ui.blank();
-
         // ── Ignored branches ─────────────────────────────────────────
 
         let ignore_default = existing
@@ -409,8 +405,6 @@ impl Config {
             &ignore_default,
         )?;
         let ignore = parse_patterns(&ignore_input);
-
-        ui.blank();
 
         // ── Remotes ──────────────────────────────────────────────────
 
@@ -431,11 +425,8 @@ impl Config {
             resolve_remotes(selected, &available_remotes, existing.as_ref())
         };
 
-        ui.blank();
-
         // ── Worktrunk integration ────────────────────────────────────
         let worktrunk = if crate::git::worktrunk_available() {
-            ui.blank();
             let default = existing.as_ref().and_then(|c| c.worktrunk).unwrap_or(true);
             let use_wt = ui.confirm(WORKTRUNK_PROMPT, default)?;
             Some(use_wt)
@@ -468,7 +459,6 @@ impl Config {
             forge_repos: existing.as_ref().and_then(|c| c.forge_repos.clone()),
         };
         config.finish_setup(git, ui, persist)?;
-        ui.blank();
 
         Ok(config)
     }
@@ -502,7 +492,6 @@ fn forge_step(git: &Git, ui: &Ui, current: Option<ForgeSetting>) -> Option<Forge
         return current;
     }
 
-    ui.blank();
     let question = forge_question(&detections);
     let confirmed = ui
         .confirm(&question, forge_default(current))

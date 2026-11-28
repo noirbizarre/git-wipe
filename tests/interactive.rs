@@ -68,6 +68,21 @@ impl Session {
         String::from_utf8_lossy(&self.transcript).into_owned()
     }
 
+    fn screen(&self) -> String {
+        let mut terminal = vt100::Parser::new(30.try_into().unwrap(), 140.try_into().unwrap(), 0);
+        terminal.process(&self.transcript);
+        // Indicatif pads full-width rows, which contents() joins as soft wraps.
+        // Physical rows match what the user sees on screen.
+        terminal
+            .screen()
+            .rows(0, 140)
+            .map(|row| row.trim_end().to_owned())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim_end()
+            .to_owned()
+    }
+
     fn expect(&mut self, text: &str) {
         self.expect_one_of(&[text]);
     }
@@ -178,6 +193,78 @@ fn accepting_defaults_deletes_values_rather_than_display_labels() {
     assert_eq!(git_branches(&dir), ["main"]);
     assert!(!dir.path().join("linked-alpha").exists());
     assert!(!session.text().contains("\x1b[36m"));
+}
+
+#[test]
+fn completed_fetch_and_pull_replace_their_pending_blocks_without_blank_lines() {
+    let dir = candidates();
+    git(
+        &dir,
+        &["remote", "add", "origin", dir.path().to_str().unwrap()],
+    );
+    git(&dir, &["fetch", "origin"]);
+    git(&dir, &["branch", "--set-upstream-to=origin/main", "main"]);
+    let mut session = Session::start(&dir, &["--local-only", "--no-worktrunk", "--no-color"]);
+    session.expect("Select branches to delete");
+    session.expect("Esc");
+    let screen = session.screen();
+    assert!(
+        screen.starts_with(concat!(
+            "✔ Fetched and pruned 1 remote(s):\n",
+            "  ✔ origin updated\n",
+            "✔ Pulled 1 target branch(es):\n",
+            "  ✔ main updated\n",
+            "Found 2 merged local branch(es):\n",
+        )),
+        "{screen}"
+    );
+    assert_eq!(screen.matches("origin updated").count(), 1, "{screen}");
+    assert_eq!(screen.matches("main updated").count(), 1, "{screen}");
+    assert!(!screen.contains("Remotes updated"), "{screen}");
+    assert!(!screen.contains("Fetching"), "{screen}");
+    assert!(!screen.contains("Pulling"), "{screen}");
+    session.send(b"\x03");
+    session.finish(false);
+}
+
+#[test]
+fn a_failed_remote_stays_visible_alongside_successful_results_and_diagnostics() {
+    let dir = candidates();
+    git(
+        &dir,
+        &["remote", "add", "origin", dir.path().to_str().unwrap()],
+    );
+    git(
+        &dir,
+        &[
+            "remote",
+            "add",
+            "broken",
+            dir.path().join("missing.git").to_str().unwrap(),
+        ],
+    );
+    let mut session = Session::start(
+        &dir,
+        &["--local-only", "--no-pull", "--no-worktrunk", "--no-color"],
+    );
+    session.expect("Select branches to delete");
+    session.expect("Esc");
+    let screen = session.screen();
+    assert!(
+        screen.starts_with(concat!(
+            "⚠ Fetch and prune finished for 2 remote(s), 1 failed:\n",
+            "  ✘ broken failed\n",
+            "  ✔ origin updated\n",
+        )),
+        "{screen}"
+    );
+    assert!(screen.contains("Failed to fetch from"), "{screen}");
+    assert!(
+        screen.contains("Continuing without 1 remote(s)"),
+        "{screen}"
+    );
+    session.send(b"\x03");
+    session.finish(false);
 }
 
 #[test]
@@ -372,7 +459,7 @@ fn setup_preserves_editable_defaults_and_accepts_empty_patterns() {
         // Accept the editable initial value unchanged.
         session.send(b"\r");
         // Wait for the editable initial value, not just the prompt that precedes it.
-        session.expect("entirely (comma-separated, e.g. wip/*): wip/*");
+        session.expect("entirely (comma-separated, e.g. wip/*) › wip/*");
         session.send(b"\x7f\x7f\x7f\x7f\x7f\r");
         session.expect("Which remotes should merged branches be deleted from?");
         session.send(b"\r");
@@ -440,7 +527,13 @@ fn interrupting_a_spinner_uses_normal_process_signal_handling() {
         &dir,
         &["--yes", "--no-pull", "--no-worktrunk", "--no-color"],
     );
-    session.expect("Fetching slow");
+    session.expect("Fetching and pruning 1 remote(s):");
+    session.expect("  - slow");
+    let screen = session.screen();
+    assert!(
+        screen.contains("Fetching and pruning 1 remote(s):\n  - slow"),
+        "{screen}"
+    );
     session.send(b"\x03");
     let status = session.finish(false);
     assert!(status.signal().is_some(), "{status}: {}", session.text());

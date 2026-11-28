@@ -151,6 +151,11 @@ Confirmation prompts accept `y` or `n`, with Enter accepting the displayed
 default. Setup text fields are pre-filled and editable: erase the text to clear
 an optional pattern list.
 
+Fetch and pull progress updates in place on terminals: the heading changes from
+a spinner to a completion marker, and each pending item becomes its result.
+Redirected output and `--verbose` print only the final blocks, without animation
+or repeated progress messages.
+
 ```sh
 # Interactive mode (prompts for confirmation at each step)
 git wipe

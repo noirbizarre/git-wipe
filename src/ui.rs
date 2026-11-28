@@ -7,7 +7,7 @@
 use choisir::{MultiSelect, SearchMode, theme::MinimalTheme};
 use console::{Style, Term};
 use dialoguer::{Confirm, Input, theme::Theme};
-use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
+use indicatif::{MultiProgress, ProgressBar, ProgressFinish, ProgressStyle};
 use std::{collections::HashMap, fmt};
 
 /// Choisir sanitizes labels and puts descriptions on a separate row, so the
@@ -148,6 +148,75 @@ fn prompt_answer<T>(answer: Option<T>) -> anyhow::Result<T> {
     })
 }
 
+/// A single progress block whose pending rows are replaced in place on terminals.
+pub struct ProgressGroup<'a> {
+    ui: &'a Ui,
+    rows: Vec<String>,
+    failed: bool,
+    live: Option<LiveProgressGroup>,
+}
+
+struct LiveProgressGroup {
+    display: MultiProgress,
+    heading: ProgressBar,
+    rows: Vec<ProgressBar>,
+}
+
+impl ProgressGroup<'_> {
+    /// Replace one pending row without appending a second copy of its result.
+    pub fn item_finished(&mut self, index: usize, text: &str, succeeded: bool) {
+        let marker = if succeeded {
+            console::style("✔").for_stderr().green()
+        } else {
+            self.failed = true;
+            console::style("✘").for_stderr().red()
+        };
+        self.rows[index] = format!("  {marker} {text}");
+        if let Some(live) = &self.live {
+            live.rows[index].set_message(self.rows[index].clone());
+        }
+    }
+
+    /// Leave exactly one completed block, including when output is redirected.
+    pub fn finish(mut self, title: &str) {
+        let marker = if self.failed {
+            console::style("⚠").for_stderr().yellow()
+        } else {
+            console::style("✔").for_stderr().green()
+        };
+        let heading = format!("{marker} {}", self.ui.heading_style.apply_to(title));
+        if let Some(live) = self.live.take() {
+            live.heading.disable_steady_tick();
+            live.heading
+                .set_style(ProgressStyle::with_template("{msg}").expect("valid progress template"));
+            live.heading.set_message(heading);
+            // Finish top-to-bottom so MultiProgress commits the block in display order.
+            live.heading.finish();
+            for row in live.rows {
+                row.finish();
+            }
+        } else {
+            self.ui.write_line(&heading);
+            for row in &self.rows {
+                self.ui.write_line(row);
+            }
+        }
+    }
+}
+
+impl Drop for ProgressGroup<'_> {
+    fn drop(&mut self) {
+        // An unwinding operation must not leave an animation or unfinished frame behind.
+        if let Some(live) = &self.live {
+            live.heading.finish_and_clear();
+            for row in &live.rows {
+                row.finish_and_clear();
+            }
+            let _ = live.display.clear();
+        }
+    }
+}
+
 /// Return a display-friendly path with `$HOME` replaced by `~`.
 ///
 /// Display only: the result is never fed back to git, which would not expand
@@ -189,7 +258,7 @@ impl Ui {
         Self {
             term: Term::stderr(),
             stdout: Term::stdout(),
-            heading_style: Style::new().cyan().bold(),
+            heading_style: Style::new().for_stderr().white().bold(),
             muted_style: Style::new().dim(),
             bold_style: Style::new().bold(),
             quiet: false,
@@ -236,7 +305,54 @@ impl Ui {
 
     /// Print a section heading.
     pub fn heading(&self, text: &str) {
-        self.write_line(&format!("\n{}", self.heading_style.apply_to(text)));
+        self.write_line(&self.heading_style.apply_to(text).to_string());
+    }
+
+    /// Animate a heading and its item rows; redirected output gets only the final block.
+    /// Verbose command echoes require a plain log rather than a repainting region.
+    pub fn progress_group(&self, title: &str, items: &[String], live: bool) -> ProgressGroup<'_> {
+        let rows: Vec<_> = items.iter().map(|item| format!("  - {item}")).collect();
+        let live = if live && !self.quiet && self.term.is_term() {
+            let display = MultiProgress::new();
+            let heading = display.add(
+                ProgressBar::new_spinner()
+                    .with_style(
+                        ProgressStyle::with_template("{spinner:.blue} {msg}")
+                            .expect("valid progress template"),
+                    )
+                    .with_message(self.heading_style.apply_to(title).to_string()),
+            );
+            let bars = rows
+                .iter()
+                .map(|row| {
+                    let bar = display.add(
+                        ProgressBar::new_spinner()
+                            .with_style(
+                                ProgressStyle::with_template("{msg}")
+                                    .expect("valid progress template"),
+                            )
+                            .with_message(row.clone()),
+                    );
+                    // Static rows need an initial tick to enter MultiProgress's draw state.
+                    bar.tick();
+                    bar
+                })
+                .collect();
+            heading.enable_steady_tick(std::time::Duration::from_millis(80));
+            Some(LiveProgressGroup {
+                display,
+                heading,
+                rows: bars,
+            })
+        } else {
+            None
+        };
+        ProgressGroup {
+            ui: self,
+            rows,
+            failed: false,
+            live,
+        }
     }
 
     /// Print a success message with a green checkmark prefix.
@@ -454,8 +570,11 @@ impl Ui {
             return op();
         }
         let spinner = ProgressBar::new_spinner()
-            .with_style(ProgressStyle::default_spinner())
-            .with_message(title.to_owned())
+            .with_style(
+                ProgressStyle::with_template("{spinner:.blue} {msg}")
+                    .expect("valid progress template"),
+            )
+            .with_message(self.heading_style.apply_to(title).to_string())
             // Drop also clears the display if the operation unwinds.
             .with_finish(ProgressFinish::AndClear);
         spinner.enable_steady_tick(std::time::Duration::from_millis(80));

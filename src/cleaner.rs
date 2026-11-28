@@ -221,12 +221,12 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
         fetch_ignores.extend(git.branch_ignored_list()?);
         let remotes = effective_remotes(git, config)?;
         if !remotes.is_empty() {
-            ui.heading(&format!(
-                "Fetching and pruning {} remote(s):",
-                remotes.len()
-            ));
-            ui.bullet_list(&remotes);
             if opts.dry_run {
+                ui.heading(&format!(
+                    "Fetching and pruning {} remote(s):",
+                    remotes.len()
+                ));
+                ui.bullet_list(&remotes);
                 ui.dry_run("Skipping remote update.");
                 for remote in &remotes {
                     report.fetch.remotes.push(RemoteFetch {
@@ -236,26 +236,38 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                 }
             } else {
                 let mut failed: Vec<String> = Vec::new();
-                let mut succeeded = 0usize;
-                for remote in &remotes {
-                    let result = ui.spinner(&format!("Fetching {remote}…"), || {
-                        git.fetch_remote_prune(remote, &fetch_ignores)
-                    });
+                let mut warnings = Vec::new();
+                let mut errors = Vec::new();
+                let mut progress = ui.progress_group(
+                    &format!("Fetching and pruning {} remote(s):", remotes.len()),
+                    &remotes,
+                    !git.is_verbose(),
+                );
+                for (index, remote) in remotes.iter().enumerate() {
+                    let result = git.fetch_remote_prune(remote, &fetch_ignores);
                     match result {
                         Ok(prune_warning) => {
                             if let Some(message) = prune_warning {
-                                warn(ui, &mut report, &message);
+                                warnings.push(message);
                             }
-                            succeeded += 1;
                             refreshed_remotes.insert(remote.clone());
-                            ui.success(&format!("{} updated.", console::style(remote).cyan()));
+                            progress.item_finished(
+                                index,
+                                &format!("{} updated", console::style(remote).cyan()),
+                                true,
+                            );
                             report.fetch.remotes.push(RemoteFetch {
                                 name: remote.clone(),
                                 status: ItemStatus::Updated,
                             });
                         }
                         Err(e) => {
-                            fail(ui, &mut report, "fetch from", remote, &e);
+                            progress.item_finished(
+                                index,
+                                &format!("{} failed", console::style(remote).red()),
+                                false,
+                            );
+                            errors.push((remote.clone(), e));
                             failed.push(remote.clone());
                             report.fetch.remotes.push(RemoteFetch {
                                 name: remote.clone(),
@@ -263,6 +275,23 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                             });
                         }
                     }
+                }
+                let completed = if failed.is_empty() {
+                    format!("Fetched and pruned {} remote(s):", remotes.len())
+                } else {
+                    format!(
+                        "Fetch and prune finished for {} remote(s), {} failed:",
+                        remotes.len(),
+                        failed.len()
+                    )
+                };
+                progress.finish(&completed);
+                // Emit diagnostics after finalizing the live region so they cannot be overwritten.
+                for message in warnings {
+                    warn(ui, &mut report, &message);
+                }
+                for (remote, error) in errors {
+                    fail(ui, &mut report, "fetch from", &remote, &error);
                 }
                 if !failed.is_empty() {
                     warn(
@@ -274,8 +303,6 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                             failed.join(", ")
                         ),
                     );
-                } else if succeeded > 0 {
-                    ui.success("Remotes updated.");
                 }
             }
         }
@@ -312,10 +339,20 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                     .iter()
                     .map(|(branch, remote, _)| format!("{branch} (from {remote})"))
                     .collect();
-                ui.heading(&format!("Pulling {} target branch(es):", pullable.len()));
-                ui.bullet_list(&display);
+                if opts.dry_run {
+                    ui.heading(&format!("Pulling {} target branch(es):", pullable.len()));
+                    ui.bullet_list(&display);
+                }
+                let mut progress = (!opts.dry_run).then(|| {
+                    ui.progress_group(
+                        &format!("Pulling {} target branch(es):", pullable.len()),
+                        &display,
+                        !git.is_verbose(),
+                    )
+                });
+                let mut errors = Vec::new();
 
-                for (branch, remote, upstream_branch) in &pullable {
+                for (index, (branch, remote, upstream_branch)) in pullable.iter().enumerate() {
                     if opts.dry_run {
                         ui.dry_run(&format!(
                             "Would pull '{branch}' from {remote}/{upstream_branch}."
@@ -329,26 +366,37 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         continue;
                     }
 
-                    let result = ui.spinner(&format!("Pulling {branch}…"), || {
-                        if *branch == current {
-                            // Checked out in the current working directory
-                            git.pull_ff_only()
-                        } else if let Some(wt_path) = wt_map.get(branch) {
-                            // Checked out in another worktree
-                            git.pull_ff_only_in(wt_path)
-                        } else {
-                            // Not checked out anywhere — fast-forward via fetch
-                            git.fetch_update_branch(remote, upstream_branch, branch)
-                        }
-                    });
+                    let result = if *branch == current {
+                        // Checked out in the current working directory
+                        git.pull_ff_only()
+                    } else if let Some(wt_path) = wt_map.get(branch) {
+                        // Checked out in another worktree
+                        git.pull_ff_only_in(wt_path)
+                    } else {
+                        // Not checked out anywhere — fast-forward via fetch
+                        git.fetch_update_branch(remote, upstream_branch, branch)
+                    };
 
                     let status = match result {
                         Ok(()) => {
-                            ui.success(&format!("{} updated.", console::style(&branch).cyan()));
+                            if let Some(progress) = &mut progress {
+                                progress.item_finished(
+                                    index,
+                                    &format!("{} updated", console::style(branch).cyan()),
+                                    true,
+                                );
+                            }
                             ItemStatus::Updated
                         }
                         Err(e) => {
-                            fail(ui, &mut report, "pull", branch, &e);
+                            if let Some(progress) = &mut progress {
+                                progress.item_finished(
+                                    index,
+                                    &format!("{} failed", console::style(branch).red()),
+                                    false,
+                                );
+                            }
+                            errors.push((branch.clone(), e));
                             ItemStatus::Failed
                         }
                     };
@@ -358,6 +406,21 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
                         upstream: upstream_branch.clone(),
                         status,
                     });
+                }
+                if let Some(progress) = progress {
+                    let completed = if errors.is_empty() {
+                        format!("Pulled {} target branch(es):", pullable.len())
+                    } else {
+                        format!(
+                            "Pull finished for {} target branch(es), {} failed:",
+                            pullable.len(),
+                            errors.len()
+                        )
+                    };
+                    progress.finish(&completed);
+                }
+                for (branch, error) in errors {
+                    fail(ui, &mut report, "pull", &branch, &error);
                 }
             }
         }
@@ -1360,7 +1423,6 @@ pub fn run(git: &Git, config: &Config, ui: &Ui, opts: &CleanerOptions) -> Result
 
     // ── Done ─────────────────────────────────────────────────────────
 
-    ui.blank();
     if opts.dry_run {
         ui.muted("Dry run complete. No changes were made.");
     } else {
