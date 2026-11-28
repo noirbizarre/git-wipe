@@ -95,8 +95,7 @@ strip = true
 
 [dependencies]
 anyhow = "1"
-# Remove the development path once this choisir API is published.
-choisir = { version = "0.1.0", path = "../../../libraries/choisir" }
+choisir = "0.1.0"
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
 console-json = "0.1.1"

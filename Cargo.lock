@@ -199,6 +199,8 @@ checksum = "fd16c4719339c4530435d38e511904438d07cce7950afa3718a84ac36c10e89e"
 [[package]]
 name = "choisir"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9cf59e245dc4e9e2a2d1bc3824b1349d0a4eda35e9276913d39cdca586c5815"
 dependencies = [
  "console",
  "dialoguer",
@@ -894,9 +896,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "owo-colors"
-version = "4.4.0"
+version = "4.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13c45bb4a6ae1280ec0803b1ef9d3455eb50f01efbbe1447ab020f1d54fba9d8"
+checksum = "83aa311bb2fea0015723819d8bb5a009ed8587a124a6e05e5d2a7462b23f7edc"
 
 [[package]]
 name = "percent-encoding"
