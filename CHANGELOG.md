@@ -11,6 +11,37 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 > There is no automatic configuration migration — see the README for how to
 > move an existing `[sync]` section across.
 
+## [0.8.0](https://github.com/noirbizarre/git-wipe/compare/0.7.0..0.8.0) - 2026-11-28
+
+### 💫 Features
+
+- **report** Use console-json for terminal JSON rendering ([#119](https://github.com/noirbizarre/git-wipe/issues/119)) - ([7f8ed5d](https://github.com/noirbizarre/git-wipe/commit/7f8ed5d90ec57e48737b0908595e853daacb70c8))
+- **ui** Migrate to choisir and streamline terminal interactions ([#122](https://github.com/noirbizarre/git-wipe/issues/122)) - ([ef5dbf9](https://github.com/noirbizarre/git-wipe/commit/ef5dbf9661d5f528109a804e5e9e9865eccba7bb))
+
+### 🐛 Bug Fixes
+
+- **aur** Align packaging files with EditorConfig - ([16b663b](https://github.com/noirbizarre/git-wipe/commit/16b663b9f11615b0074154b739099f138ba24165))
+
+### 🏗️ Build
+
+- **deps** Update all dependencies - ([69e28ba](https://github.com/noirbizarre/git-wipe/commit/69e28bae1cbe2b7051ccc9e4a0057d824f33c3bb))
+
+### 🔧 CI
+
+- **deps** Relock with aligned ShellCheck tool key - ([6fe9678](https://github.com/noirbizarre/git-wipe/commit/6fe96784b132d25cb9a7b305fc852264467961ab))
+
+### 🧹 Chores
+
+- **template** Record wordmark and icon selections - ([050a1ff](https://github.com/noirbizarre/git-wipe/commit/050a1ff4179a11bb333154aa4ce18ace25cace1f))
+- **template** Merge latest rust.tpl updates - ([83a94d5](https://github.com/noirbizarre/git-wipe/commit/83a94d58af6465c29f2578c4313abd4baee9fc4f))
+- Update template tooling and dependencies ([#121](https://github.com/noirbizarre/git-wipe/issues/121)) - ([eadc03d](https://github.com/noirbizarre/git-wipe/commit/eadc03d5f3753c5ab2e1b24ddba6d29fdfa7f98c))
+- Remove unexpected opencode report - ([e2ba518](https://github.com/noirbizarre/git-wipe/commit/e2ba5182ec3096ac082498c6a14bb1c0a9e27edc))
+
+### Tpl
+
+- Render rust at main - ([c286615](https://github.com/noirbizarre/git-wipe/commit/c2866159a11e82ddca917adb05269c19b3923668))
+- Render rust at main - ([10ad345](https://github.com/noirbizarre/git-wipe/commit/10ad345a06bbb7982535c37f9442b8837df84b50))
+
 ## [0.7.0](https://github.com/noirbizarre/git-wipe/compare/0.6.0..0.7.0) - 2026-11-07
 
 ### 💫 Features
