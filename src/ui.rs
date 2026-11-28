@@ -4,9 +4,9 @@
 //! error classification stay consistent. Output methods are best-effort and
 //! swallow I/O errors; prompts propagate them, since they need an answer.
 
-use choisir::{MultiSelect, SearchMode, theme::MinimalTheme};
+use choisir::{Confirm, MultiSelect, SearchMode, theme::MinimalTheme};
 use console::{Style, Term};
-use dialoguer::{Confirm, Input, theme::Theme};
+use dialoguer::{Input, theme::Theme};
 use indicatif::{MultiProgress, ProgressBar, ProgressFinish, ProgressStyle};
 use std::{collections::HashMap, fmt};
 
@@ -187,19 +187,17 @@ impl ProgressGroup<'_> {
         let heading = format!("{marker} {}", self.ui.heading_style.apply_to(title));
         if let Some(live) = self.live.take() {
             live.heading.disable_steady_tick();
-            live.heading
-                .set_style(ProgressStyle::with_template("{msg}").expect("valid progress template"));
-            live.heading.set_message(heading);
-            // Finish top-to-bottom so MultiProgress commits the block in display order.
-            live.heading.finish();
-            for row in live.rows {
-                row.finish();
+            live.heading.finish_and_clear();
+            for row in &live.rows {
+                row.finish_and_clear();
             }
-        } else {
-            self.ui.write_line(&heading);
-            for row in &self.rows {
-                self.ui.write_line(row);
-            }
+            let _ = live.display.clear();
+        }
+        // MultiProgress clips tall groups to the viewport. Commit the final block
+        // as ordinary output so every result reaches the terminal's scrollback.
+        self.ui.write_line(&heading);
+        for row in &self.rows {
+            self.ui.write_line(row);
         }
     }
 }

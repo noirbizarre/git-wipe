@@ -148,7 +148,8 @@ color. Paths stay dimmed and status details stay cyan on the same line as each
 branch, regardless of selection. Short remote lists do not enable search.
 
 Confirmation prompts accept `y` or `n`, with Enter accepting the displayed
-default. Setup text fields are pre-filled and editable: erase the text to clear
+default; arrow keys move between the Yes/No buttons before Enter confirms.
+Setup text fields are pre-filled and editable: erase the text to clear
 an optional pattern list.
 
 Fetch and pull progress updates in place on terminals: the heading changes from

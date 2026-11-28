@@ -23,9 +23,13 @@ struct Session {
 
 impl Session {
     fn start(dir: &TempDir, args: &[&str]) -> Self {
+        Self::start_with_rows(dir, args, 30)
+    }
+
+    fn start_with_rows(dir: &TempDir, args: &[&str], rows: u16) -> Self {
         let pair = portable_pty::native_pty_system()
             .openpty(portable_pty::PtySize {
-                rows: 30,
+                rows,
                 cols: 140,
                 ..Default::default()
             })
@@ -372,6 +376,15 @@ fn typeahead_searches_branch_names_without_matching_display_paths() {
     assert!(frame.contains("feat/yesno-filter"), "{frame}");
     assert!(!frame.contains("refactor/dialoger"), "{frame}");
     assert!(!frame.contains("refactor-dialoger"), "{frame}");
+    session.send(b"\x1b");
+    session.expect("refactor/dialoger");
+    session.expect("Esc");
+    session.send(b"git-tpl");
+    session.expect("No matching options");
+    session.expect("Esc");
+    let screen = session.screen();
+    assert!(!screen.contains("feat/yesno-filter"), "{screen}");
+    assert!(!screen.contains("refactor/dialoger"), "{screen}");
     session.send(b"\x03");
     session.finish(false);
 }
@@ -483,6 +496,125 @@ fn setup_preserves_editable_defaults_and_accepts_empty_patterns() {
             config.contains(&format!("wipe.forge {forge_default}")),
             "{config}"
         );
+    }
+}
+
+#[test]
+fn setup_confirmation_buttons_support_arrow_navigation() {
+    let dir = init_repo();
+    configure(&dir);
+    git(&dir, &["config", "wipe.forge", "false"]);
+    git(
+        &dir,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/example/example.git",
+        ],
+    );
+    let mut session = Session::start(&dir, &["config", "setup", "--no-color"]);
+    session.expect("Which branches should be protected from deletion?");
+    session.send(b"\r");
+    session.expect("Additional patterns to protect");
+    session.send(b"\r");
+    session.expect("Branch patterns to ignore entirely");
+    session.send(b"\r");
+    session.expect("Which remotes should merged branches be deleted from?");
+    session.send(b"\r");
+    if session.expect_one_of(&["Worktrunk detected:", "GitHub detected:"]) == 0 {
+        session.send(b"\r");
+        session.expect("GitHub detected:");
+    }
+    session.expect("No");
+    session.send(b"\x1b[D\r");
+    session.finish(true);
+    assert_eq!(git(&dir, &["config", "--get", "wipe.forge"]), "true\n");
+}
+
+#[test]
+fn completed_progress_retains_every_result_when_the_group_exceeds_terminal_height() {
+    let dir = init_repo();
+    configure(&dir);
+    for index in 0..9 {
+        git(
+            &dir,
+            &[
+                "remote",
+                "add",
+                &format!("remote-{index}"),
+                dir.path().to_str().unwrap(),
+            ],
+        );
+    }
+    let mut session = Session::start_with_rows(
+        &dir,
+        &[
+            "--yes",
+            "--no-pull",
+            "--local-only",
+            "--no-worktrunk",
+            "--no-color",
+        ],
+        6,
+    );
+    session.finish(true);
+    // Ordinary final lines must survive in scrollback even when live rows were clipped.
+    let mut expected = String::from("✔ Fetched and pruned 9 remote(s):\n");
+    for index in 0..9 {
+        expected.push_str(&format!("  ✔ remote-{index} updated\n"));
+    }
+    assert!(
+        session.text().replace("\r\n", "\n").contains(&expected),
+        "{}",
+        session.text()
+    );
+}
+
+#[test]
+fn terminal_verbose_and_json_modes_do_not_animate_fetch_or_pull() {
+    let dir = init_repo();
+    configure(&dir);
+    git(
+        &dir,
+        &["remote", "add", "origin", dir.path().to_str().unwrap()],
+    );
+    git(&dir, &["fetch", "origin"]);
+    git(&dir, &["branch", "--set-upstream-to=origin/main", "main"]);
+    for mode in ["--verbose", "--json"] {
+        let mut session = Session::start(
+            &dir,
+            &[
+                "--yes",
+                "--local-only",
+                "--no-worktrunk",
+                "--no-color",
+                mode,
+            ],
+        );
+        session.finish(true);
+        let transcript = session.text();
+        assert!(!transcript.contains("Fetching and pruning"), "{transcript}");
+        assert!(!transcript.contains("Pulling"), "{transcript}");
+        if mode == "--json" {
+            let document: serde_json::Value = serde_json::from_str(&transcript).unwrap();
+            assert_eq!(document["fetch"]["remotes"][0]["status"], "updated");
+            assert_eq!(document["pull"]["branches"][0]["status"], "updated");
+        } else {
+            assert_eq!(
+                transcript
+                    .matches("Fetched and pruned 1 remote(s):")
+                    .count(),
+                1,
+                "{transcript}"
+            );
+            assert_eq!(
+                transcript.matches("Pulled 1 target branch(es):").count(),
+                1,
+                "{transcript}"
+            );
+            assert!(transcript.contains("$ git "), "{transcript}");
+        }
     }
 }
 
